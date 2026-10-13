@@ -1,0 +1,126 @@
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:6280
+load:0x40078000,len:15864
+load:0x40080400,len:3920
+entry 0x40080644
+I (27) boot: ESP-IDF v5.5.4 2nd stage bootloader
+I (27) boot: compile time Sep 18 2026 22:57:06
+I (28) boot: Multicore bootloader
+I (29) boot: chip revision: v3.0
+I (32) boot.esp32: SPI Speed      : 40MHz
+I (35) boot.esp32: SPI Mode       : DIO
+I (39) boot.esp32: SPI Flash Size : 4MB
+I (42) boot: Enabling RNG early entropy source...
+I (47) boot: Partition Table:
+I (49) boot: ## Label            Usage          Type ST Offset   Length
+I (56) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (62) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (69) boot:  2 factory          factory app      00 00 00010000 00177000
+I (75) boot: End of partition table
+I (79) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=21150h (135504) map
+I (132) esp_image: segment 1: paddr=00031178 vaddr=3ffb0000 size=048c4h ( 18628) load
+I (140) esp_image: segment 2: paddr=00035a44 vaddr=40080000 size=0a5d4h ( 42452) load
+I (156) esp_image: segment 3: paddr=00040020 vaddr=400d0020 size=a05d0h (656848) map
+I (381) esp_image: segment 4: paddr=000e05f8 vaddr=4008a5d4 size=10864h ( 67684) load
+I (408) esp_image: segment 5: paddr=000f0e64 vaddr=50000000 size=00020h (    32) load
+I (421) boot: Loaded app from partition at offset 0x10000
+I (421) boot: Disabling RNG early entropy source...
+I (432) cpu_start: Multicore app
+I (440) cpu_start: GPIO 3 and 1 are used as console UART I/O pins
+I (440) cpu_start: Pro cpu start user code
+I (440) cpu_start: cpu freq: 160000000 Hz
+I (442) app_init: Application information:
+I (446) app_init: Project name:     sd_recorder
+I (450) app_init: App version:      1
+I (453) app_init: Compile time:     Oct 12 2026 23:08:07
+I (458) app_init: ELF file SHA256:  c42b46f18...
+I (463) app_init: ESP-IDF:          v5.5.4
+I (467) efuse_init: Min chip rev:     v0.0
+I (470) efuse_init: Max chip rev:     v3.99 
+I (474) efuse_init: Chip rev:         v3.0
+I (479) heap_init: Initializing. RAM available for dynamic allocation:
+I (485) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM
+I (490) heap_init: At 3FFBB9B0 len 00024650 (145 KiB): DRAM
+I (495) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM
+I (500) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM
+I (506) heap_init: At 4009AE38 len 000051C8 (20 KiB): IRAM
+I (513) spi_flash: detected chip: generic
+I (515) spi_flash: flash io: dio
+I (519) main_task: Started on CPU0
+I (529) main_task: Calling app_main()
+I (529) recorder: ESP32 ¼���� SD ��  |  ������ 16000 Hz, 16bit ������
+I (529) oled: �ҵ� OLED����ַ 0x3C
+I (589) oled: OLED ��ϻ�������ʾ��30 �룩������Ӧ 8 �зֱ�Ϊ A~H �ظ���ĸ
+I (1029) recorder: �� 400 kHz ���ֹ��� SD ��...
+I (1029) sdspi_transaction: cmd=52, R1 response: command not supported
+I (1069) sdspi_transaction: cmd=5, R1 response: command not supported
+I (1149) recorder: SD �����ֳɹ�����ʼ������...
+I (1159) recorder: ���ٵ� 4000 kHz����дУ��ͨ��
+I (1159) recorder: ���ٵ� 10000 kHz����дУ��ͨ��
+I (1159) recorder: ���ٵ� 20000 kHz����дУ��ͨ��
+I (1159) recorder: SD �����չ���Ƶ��: 20000 kHz
+Name: SU04G
+Type: SDHC
+Speed: 400.00 kHz (limit: 400.00 kHz)
+Size: 3781MB
+CSD: ver=2, sector_size=512, capacity=7744512 read_bl_len=9
+SSR: bus_width=1
+I (1179) recorder: I2S ������˷��Ѿ��� @ 16000 Hz
+I (1219) wifi:wifi driver task: 3ffd3908, prio:23, stack:6656, core=0
+I (1229) wifi:wifi firmware version: 0947e8b
+I (1229) wifi:wifi certification version: v7.0
+I (1229) wifi:config NVS flash: enabled
+I (1229) wifi:config nano formatting: disabled
+I (1239) wifi:Init data frame dynamic rx buffer num: 32
+I (1239) wifi:Init static rx mgmt buffer num: 5
+I (1239) wifi:Init management short buffer num: 32
+I (1249) wifi:Init dynamic tx buffer num: 32
+I (1249) wifi:Init static rx buffer size: 1600
+I (1259) wifi:Init static rx buffer num: 10
+I (1259) wifi:Init dynamic rx buffer num: 32
+I (1269) wifi_init: rx ba win: 6
+I (1269) wifi_init: accept mbox: 6
+I (1269) wifi_init: tcpip mbox: 32
+I (1269) wifi_init: udp mbox: 6
+I (1279) wifi_init: tcp mbox: 6
+I (1279) wifi_init: tcp tx win: 5760
+I (1279) wifi_init: tcp rx win: 5760
+I (1289) wifi_init: tcp mss: 1440
+I (1289) wifi_init: WiFi IRAM OP enabled
+I (1289) wifi_init: WiFi RX IRAM OP enabled
+W (1299) wifi:Password length matches WPA2 standards, authmode threshold changes from OPEN to WPA2
+I (1309) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06
+I (1399) wifi:mode : sta (08:3a:f2:3e:c4:90)
+I (1399) wifi:enable tsf
+I (1399) wifi: �������� "@HiBo"����̨�Զ����������Ϻ���ӡ IP��
+I (1399) wifi: STA ���������������� @HiBo ...
+I (1409) ftp: FTP ���������������˿� 21����Ŀ¼ /sdcard
+I (1409) main_task: Returned from app_main()
+I (1409) recorder: �����У���һ�� BOOT ��(GPIO0)��ʼ¼��
+I (3819) wifi:new:<6,0>, old:<1,0>, ap:<255,255>, sta:<6,0>, prof:1, snd_ch_cfg:0x0
+I (3819) wifi:state: init -> auth (0xb0)
+I (5079) wifi:state: auth -> assoc (0x0)
+I (5099) wifi:Association refused temporarily time 999, comeback time 1099 (TUs)
+I (6219) wifi:state: assoc -> auth (0xb0)
+I (7539) wifi:state: auth -> assoc (0x0)
+I (7559) wifi:state: assoc -> run (0x10)
+I (7599) wifi:connected with @HiBo, aid = 4, channel 6, BW20, bssid = 10:5f:02:b3:ec:c4
+I (7599) wifi:security: WPA3-SAE HUNT_AND_PECK, phy: bgn, rssi: -62, cipher(pairwise:0x3, group:0x3), pmf:1
+I (7609) wifi:pm start, type: 1
+
+I (7609) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (7649) wifi:<ba-add>idx:0 (ifx:0, 10:5f:02:b3:ec:c4), tid:6, ssn:2, winSize:64
+I (7699) wifi:AP's beacon interval = 102400 us, DTIM period = 1
+I (7829) wifi:<ba-add>idx:1 (ifx:0, 10:5f:02:b3:ec:c4), tid:0, ssn:0, winSize:64
+I (8809) esp_netif_handlers: sta ip: 192.168.10.116, mask: 255.255.255.0, gw: 192.168.10.1
+I (8809) wifi: ===== WiFi ������ =====
+I (8809) wifi:   IP      : 192.168.10.116
+I (8809) wifi:   ����    : 192.168.10.1
+I (8809) wifi:   ��������: 255.255.255.0
+I (8819) wifi:   FTP ����: ftp://192.168.10.116  (�˿� 21)
+I (8819) wifi: =======================
