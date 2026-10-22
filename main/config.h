@@ -20,4 +20,4 @@
 #define CFG_KEY_GPIO          33             /* 配置按键引脚 */
 #define CFG_KEY_LONGPRESS_MS  3000           /* 长按时长（毫秒） */
 #define CFG_AP_SSID           "HIBO_config"  /* 配置热点名称 */
-#define CFG_AP_PASSWORD       "moshijia"     /* 配置热点密码 */
+#define CFG_AP_PASSWORD       "moshujia"     /* 配置热点密码 */

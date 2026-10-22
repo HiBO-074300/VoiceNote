@@ -2,13 +2,13 @@
 
 #include <stdbool.h>
 
-/**
- * @brief ³õÊ¼»¯ WiFi Station Ä£Ê½²¢Á¬½ÓÈÈµã£¨·Ç×èÈû£¬ÄÚ²¿×Ô¶¯ÖØÁ¬£©
+/*
+ * WiFi å¤šç»„è¿æ¥
  *
- * ±ØĞëÏÈµ÷ÓÃ esp_netif_init() ºÍ esp_event_loop_create_default()
- *
- * @param ssid      WiFi Ãû³Æ
- * @param password  WiFi ÃÜÂë£¨¿ª·ÅÍøÂç´« ""£©
- * @return true  ²ÎÊıÏÂ·¢³É¹¦
+ * ä¾åºå°è¯• NVS ä¸­å·²å­˜çš„ WiFiï¼ˆæœ€å¤š 3 ç»„ï¼Œè§ wifi_cfg.hï¼‰ï¼Œ
+ * è‹¥ä¸€ç»„éƒ½æ²¡å­˜åˆ™ä½¿ç”¨ config.h é‡Œçš„ç¼–è¯‘é»˜è®¤å€¼ã€‚
+ * å…±å°è¯• 2 è½®ï¼ˆWIFI_ROUNDSï¼‰ï¼Œå…¨éƒ¨å¤±è´¥è¿”å› falseï¼Œ
+ * ä¸Šå±‚åº”æ®æ­¤è¿›å…¥ WiFi é…ç½®æ¨¡å¼ï¼ˆwifi_cfg_enter_configï¼‰ã€‚
+ * ä»»ä¸€ç»„æˆåŠŸå³è¿”å› true å¹¶ä¿æŒè¿æ¥ï¼Œæ–­çº¿è‡ªåŠ¨é‡è¿è¯¥ç»„ã€‚
  */
-bool wifi_sta_start(const char *ssid, const char *password);
+bool wifi_sta_connect(void);

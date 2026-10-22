@@ -59,6 +59,10 @@ static const char *TAG = "recorder";
 #define SD_PIN_SCLK   18
 #define SD_MOUNT_POINT  "/sdcard"
 
+/* SD 卡插入检测（GPIO34）：高电平=未插入，低电平=已插入
+ * GPIO34 无内部上下拉，需外部 10k 上拉到 3.3V，卡座 CD 开关接 GND */
+#define SD_PIN_CD    34
+
 /* 麦克风引脚 */
 #define MIC_PIN_BCLK  26            // I2S: BCLK(SCK)   PDM: CLK
 #define MIC_PIN_WS    25            // I2S: WS(LRCLK)   PDM: 不用
@@ -129,6 +133,24 @@ typedef enum {
 
 static volatile led_mode_t s_led_mode = LED_MODE_OFF;
 static volatile bool       s_storage_ok = false;   // 存储是否可用（不可用则按键无效）
+static bool                s_spi_bus_ready = false; // SPI 总线是否已初始化（重新挂载时跳过）
+
+/* ------------------------- SD 卡插入检测 ------------------------- */
+
+static bool sd_card_inserted(void)
+{
+    return gpio_get_level((gpio_num_t)SD_PIN_CD) == 0;
+}
+
+/* 两次读取间隔 50ms 均为低电平才算已插入（简单消抖） */
+static bool sd_card_inserted_stable(void)
+{
+    if (!sd_card_inserted()) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return sd_card_inserted();
+}
 
 /* ---------------------------- WAV 头 ---------------------------- */
 
@@ -268,10 +290,22 @@ static esp_err_t mount_sdcard(void)
         .quadhd_io_num = -1,
         .max_transfer_sz = 4000,
     };
-    esp_err_t ret = spi_bus_initialize(s_host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI 总线初始化失败: %s", esp_err_to_name(ret));
-        return ret;
+    esp_err_t ret;
+
+    /* SPI 总线只需初始化一次；重新挂载时跳过（已挂载会返回 INVALID_STATE） */
+    if (!s_spi_bus_ready) {
+        ret = spi_bus_initialize(s_host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "SPI 总线初始化失败: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        s_spi_bus_ready = true;
+    }
+
+    /* 重新插卡场景：先卸载上一次的挂载点，避免 VFS 重复注册失败 */
+    if (s_card != NULL) {
+        esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, s_card);
+        s_card = NULL;
     }
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
@@ -599,6 +633,14 @@ static bool record_to_file(const char *path)
     uint32_t last_report = 0;
 
     while (1) {
+        /* 拔卡检测：GPIO34 变高立即停止。最后 5 秒同步点之前的数据
+           已是完整 WAV，只有同步点之后的一小段来不及写卡 */
+        if (!sd_card_inserted()) {
+            ESP_LOGE(TAG, "检测到 SD 卡被拔出！数据已保护到最后同步点，立即停止录音");
+            ok = false;
+            break;
+        }
+
         if (written >= limit_bytes) {
             ESP_LOGW(TAG, "已录满 %d 秒（RECORD_MAX_SECONDS），自动停止", RECORD_MAX_SECONDS);
             break;
@@ -698,11 +740,26 @@ static void record_task(void *arg)
         bool ok = record_to_file(path);
 
         if (!ok) {
-            /* 写卡出错（卡满 / 被拔出 / 损坏）：不再假装能录，LED 熄灭并停用按键 */
-            ESP_LOGE(TAG, "存储异常，已停止录音功能（LED 熄灭，按键无效）");
+            /* 写卡出错（卡满 / 被拔出 / 损坏）：停用按键，等重新插卡后自动恢复 */
+            ESP_LOGE(TAG, "存储异常，等待重新插入 SD 卡...");
             s_storage_ok = false;
             s_led_mode = LED_MODE_OFF;
+            oled_set_sd_ok(false);
             oled_set_state(OLED_ST_ERROR);
+
+            /* 阻塞等待重新插卡，然后重新挂载恢复 */
+            while (!sd_card_inserted_stable()) {
+                vTaskDelay(pdMS_TO_TICKS(300));
+            }
+            ESP_LOGI(TAG, "检测到 SD 卡重新插入，重新挂载...");
+            if (mount_sdcard() == ESP_OK) {
+                s_storage_ok = true;
+                oled_set_sd_ok(true);
+                oled_set_state(OLED_ST_READY);
+                ESP_LOGI(TAG, "SD 卡重新挂载成功，录音功能已恢复");
+            } else {
+                ESP_LOGE(TAG, "重新挂载失败，请拔出后重插");
+            }
             continue;
         }
 
@@ -733,11 +790,31 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(gpio_config(&key_cfg));
 
-    /* SD 卡和麦克风先初始化：这两个最吃资源，别让 WiFi 抢占了它们的机会 */
-    if (mount_sdcard() != ESP_OK) {
-        ESP_LOGE(TAG, "SD 卡不可用：LED 保持熄灭，按键无效（无法录音存储）");
-        oled_set_state(OLED_ST_ERROR);
-        return;
+    /* SD 卡插入检测引脚（GPIO34）：无内部上下拉，靠外部 10k 上拉 */
+    gpio_config_t cd_cfg = {
+        .pin_bit_mask = (1ULL << SD_PIN_CD),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&cd_cfg));
+
+    /* 插卡后才初始化 SD 卡；挂载失败（坏卡/接触不良）时拔出重插即可重试 */
+    while (1) {
+        if (!sd_card_inserted_stable()) {
+            ESP_LOGI(TAG, "未检测到 SD 卡（GPIO34=高电平），请插卡...");
+            oled_set_sd_ok(false);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        ESP_LOGI(TAG, "检测到 SD 卡插入，开始初始化...");
+        if (mount_sdcard() == ESP_OK) {
+            break;
+        }
+        ESP_LOGE(TAG, "SD 卡初始化失败，请拔出后重新插入重试");
+        ESP_LOGE(TAG, "（检查 MISO 10k 上拉 / 接线 / 卡是否 FAT32）");
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
     if (mic_init() != ESP_OK) {
         ESP_LOGE(TAG, "麦克风初始化失败：LED 保持熄灭，按键无效（无法录音存储）");
@@ -760,14 +837,8 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* 连接 WiFi：优先用配置网页保存的凭据（NVS），没有则用 config.h 默认值 */
-    char ssid[33] = WIFI_SSID;
-    char pass[65] = WIFI_PASSWORD;
-    if (wifi_cfg_load(ssid, sizeof(ssid), pass, sizeof(pass))) {
-        ESP_LOGI(TAG, "使用已保存的 WiFi 配置: %s", ssid);
-    }
-
-    if (wifi_sta_start(ssid, pass)) {
+    /* 连接 WiFi：依序尝试 NVS 已存的多组配置（最多 3 组 × 2 轮） */
+    if (wifi_sta_connect()) {
         /* FTP 服务器常驻，WiFi 断线重连后无需重启即可继续用 */
         if (ftp_server_start(SD_MOUNT_POINT) != ESP_OK) {
             ESP_LOGE(TAG, "FTP 服务器启动失败");
@@ -778,6 +849,10 @@ void app_main(void)
         }
         /* 长按 GPIO33 按键可进入 WiFi 配置模式（热点 HIBO_config） */
         wifi_cfg_button_start();
+    } else {
+        /* 所有 WiFi 两轮都没连上：自动进入配置模式，等用户配新网络 */
+        ESP_LOGW(TAG, "所有 WiFi 均连接失败，自动进入配置模式（热点 %s）", CFG_AP_SSID);
+        wifi_cfg_enter_config();
     }
 #endif
 

@@ -1,11 +1,11 @@
 /*
- * WiFi ÅäÖÃÃÅ»§£¨AP + ÄÚÖÃÍøÒ³£©
+ * WiFi é…ç½®é—¨æˆ·ï¼ˆAP + å†…ç½®ç½‘é¡µï¼‰
  *
- * ³¤°´ GPIO33 ½øÈëÅäÖÃÄ£Ê½£º
- *   1. Í£µô STA Á¬½Ó£¬ÇĞ»»ÎªÈÈµã£¨SSID/ÃÜÂë¼û config.h£©
- *   2. Æô¶¯ HTTP ·şÎñ£¨80 ¶Ë¿Ú£©£¬Íø¹ØµØÖ·¹Ì¶¨ 192.168.4.1
- *   3. ÓÃ»§Á¬½ÓÈÈµãºó·ÃÎÊ http://192.168.4.1£¬ÌîÈëĞÂ WiFi Ãû³Æ/ÃÜÂë
- *   4. ±£´æµ½ NVS ºóÉè±¸×Ô¶¯ÖØÆô£¬ÓÃĞÂÅäÖÃÁ¬Íø
+ * é•¿æŒ‰ GPIO33 è¿›å…¥é…ç½®æ¨¡å¼ï¼š
+ *   1. åœæ‰ STA è¿æ¥ï¼Œåˆ‡æ¢ä¸ºçƒ­ç‚¹ï¼ˆSSID/å¯†ç è§ config.hï¼‰
+ *   2. å¯åŠ¨ HTTP æœåŠ¡ï¼ˆ80 ç«¯å£ï¼‰ï¼Œç½‘å…³åœ°å€å›ºå®š 192.168.4.1
+ *   3. ç”¨æˆ·è¿æ¥çƒ­ç‚¹åè®¿é—® http://192.168.4.1ï¼Œå¡«å…¥æ–° WiFi åç§°/å¯†ç 
+ *   4. ä¿å­˜åˆ° NVS åè®¾å¤‡è‡ªåŠ¨é‡å¯ï¼Œç”¨æ–°é…ç½®è¿ç½‘
  */
 #include <string.h>
 #include <stdio.h>
@@ -25,45 +25,111 @@
 
 static const char *TAG = "wificfg";
 
-static volatile bool s_active = false;   /* ÅäÖÃÄ£Ê½½øĞĞÖĞ */
-static char s_cur_ssid[33];              /* µ±Ç°ÉúĞ§µÄ WiFi Ãû£¨ÍøÒ³ÉÏÕ¹Ê¾£© */
+static volatile bool s_active = false;   /* é…ç½®æ¨¡å¼è¿›è¡Œä¸­ */
+static char s_cur_ssid[33];              /* å½“å‰ç”Ÿæ•ˆçš„ WiFi åï¼ˆç½‘é¡µä¸Šå±•ç¤ºï¼‰ */
 
 bool wifi_cfg_is_active(void)
 {
     return s_active;
 }
 
-/* ---------------------------- NVS ´æÈ¡ ---------------------------- */
+/* ---------------------------- NVS å­˜å–ï¼ˆå¤šç»„ï¼‰ ---------------------------- */
 
-static bool nvs_save(const char *ssid, const char *pass)
+/* ç”Ÿæˆç´¢å¼•é”®åï¼šw0s/w0p, w1s/w1p, w2s/w2p */
+static void slot_key(int idx, bool is_pass, char *out, size_t out_len)
 {
-    nvs_handle_t h;
-    if (nvs_open("wificfg", NVS_READWRITE, &h) != ESP_OK) {
-        return false;
-    }
-    nvs_set_str(h, "ssid", ssid);
-    nvs_set_str(h, "pass", pass);
-    esp_err_t err = nvs_commit(h);
-    nvs_close(h);
-    return err == ESP_OK;
+    snprintf(out, out_len, "w%d%c", idx, is_pass ? 'p' : 's');
 }
 
-bool wifi_cfg_load(char *ssid, size_t ssid_len, char *pass, size_t pass_len)
+/* è¯»å‡ºç¬¬ idx ç»„ï¼›è¶Šç•Œæˆ–ä¸å­˜åœ¨è¿”å› false */
+bool wifi_cfg_get(int idx, char *ssid, size_t ssid_len, char *pass, size_t pass_len)
 {
+    if (idx < 0 || idx >= WIFI_SLOT_MAX) {
+        return false;
+    }
     nvs_handle_t h;
     if (nvs_open("wificfg", NVS_READONLY, &h) != ESP_OK) {
         return false;
     }
+    char key[8];
     size_t l1 = ssid_len, l2 = pass_len;
-    esp_err_t e1 = nvs_get_str(h, "ssid", ssid, &l1);
-    esp_err_t e2 = nvs_get_str(h, "pass", pass, &l2);
+    slot_key(idx, false, key, sizeof(key));
+    esp_err_t e1 = nvs_get_str(h, key, ssid, &l1);
+    slot_key(idx, true, key, sizeof(key));
+    esp_err_t e2 = nvs_get_str(h, key, pass, &l2);
     nvs_close(h);
     return e1 == ESP_OK && e2 == ESP_OK;
 }
 
-/* ---------------------------- ¹¤¾ß ---------------------------- */
+/* å·²å­˜ç»„æ•°ï¼ˆ0~3ï¼‰ï¼›å…¼å®¹æ—§ç‰ˆå•ç»„å­˜å‚¨ï¼ˆ"ssid"/"pass" é”®è§†ä¸ºç¬¬ 1 ç»„ï¼‰ */
+int wifi_cfg_count(void)
+{
+    nvs_handle_t h;
+    uint8_t cnt = 0;
+    if (nvs_open("wificfg", NVS_READONLY, &h) != ESP_OK) {
+        return 0;
+    }
+    if (nvs_get_u8(h, "wcnt", &cnt) != ESP_OK) {
+        /* æ²¡æœ‰æ–°å¼è®¡æ•°å€¼ï¼šæ£€æŸ¥æ—§ç‰ˆé”® */
+        char tmp[33];
+        size_t l = sizeof(tmp);
+        cnt = (nvs_get_str(h, "ssid", tmp, &l) == ESP_OK) ? 1 : 0;
+    }
+    nvs_close(h);
+    if (cnt > WIFI_SLOT_MAX) {
+        cnt = WIFI_SLOT_MAX;
+    }
+    return (int)cnt;
+}
 
-/* Ô­µØ URL ½âÂë£º%XX Ê®Áù½øÖÆ×ªÒå + '+' ×ª¿Õ¸ñ */
+/* æ–°å¢ä¸€ç»„ WiFiï¼šæ–°ç»„æ’ç¬¬ 1 ä½ï¼ŒåŸæœ‰ç»„ä¾æ¬¡åç§»ï¼Œæœ€å¤šä¿ç•™ 3 ç»„ï¼ˆæœ€æ—§çš„è¢«æŒ¤æ‰ï¼‰ */
+bool wifi_cfg_add(const char *ssid, const char *pass)
+{
+    /* å…ˆè¯»å‡ºåŸæœ‰çš„ç»„ */
+    char old_s[WIFI_SLOT_MAX][33] = { 0 };
+    char old_p[WIFI_SLOT_MAX][65] = { 0 };
+    int old_cnt = wifi_cfg_count();
+    if (old_cnt > WIFI_SLOT_MAX - 1) {
+        old_cnt = WIFI_SLOT_MAX - 1;
+    }
+    for (int i = 0; i < old_cnt; i++) {
+        wifi_cfg_get(i, old_s[i], sizeof(old_s[i]), old_p[i], sizeof(old_p[i]));
+    }
+
+    nvs_handle_t h;
+    if (nvs_open("wificfg", NVS_READWRITE, &h) != ESP_OK) {
+        return false;
+    }
+
+    char key[8];
+    slot_key(0, false, key, sizeof(key));
+    nvs_set_str(h, key, ssid);
+    slot_key(0, true, key, sizeof(key));
+    nvs_set_str(h, key, pass);
+    for (int i = 0; i < old_cnt; i++) {
+        slot_key(i + 1, false, key, sizeof(key));
+        nvs_set_str(h, key, old_s[i]);
+        slot_key(i + 1, true, key, sizeof(key));
+        nvs_set_str(h, key, old_p[i]);
+    }
+    uint8_t new_cnt = (uint8_t)(old_cnt + 1);
+    nvs_set_u8(h, "wcnt", new_cnt);
+    esp_err_t err = nvs_commit(h);
+    nvs_close(h);
+
+    ESP_LOGI(TAG, "WiFi åˆ—è¡¨å·²æ›´æ–°ï¼Œå…± %d ç»„ï¼ˆæ–°ç»„: %sï¼‰", (int)new_cnt, ssid);
+    return err == ESP_OK;
+}
+
+/* å…¼å®¹æ—§æ¥å£ï¼šè¯»å–ç¬¬ 1 ç»„ */
+bool wifi_cfg_load(char *ssid, size_t ssid_len, char *pass, size_t pass_len)
+{
+    return wifi_cfg_get(0, ssid, ssid_len, pass, pass_len);
+}
+
+/* ---------------------------- å·¥å…· ---------------------------- */
+
+/* åŸåœ° URL è§£ç ï¼š%XX åå…­è¿›åˆ¶è½¬ä¹‰ + '+' è½¬ç©ºæ ¼ */
 static void url_decode(char *s)
 {
     char *w = s;
@@ -82,27 +148,45 @@ static void url_decode(char *s)
     *w = '\0';
 }
 
-/* ---------------------------- HTTP ÍøÒ³ ---------------------------- */
+/* ---------------------------- HTTP ç½‘é¡µ ---------------------------- */
 
 static esp_err_t handler_home(httpd_req_t *req)
 {
-    char page[1024];
+    char page[1536];
+    char list[512] = "";
+
+    /* åˆ—å‡ºå·²å­˜çš„ WiFi ç»„ */
+    int cnt = wifi_cfg_count();
+    if (cnt == 0) {
+        snprintf(list, sizeof(list), "<li>ï¼ˆæ— ï¼Œç”¨ç¼–è¯‘é»˜è®¤å€¼ï¼‰</li>");
+    }
+    for (int i = 0; i < cnt; i++) {
+        char ssid[33];
+        char pass[65];
+        if (wifi_cfg_get(i, ssid, sizeof(ssid), pass, sizeof(pass))) {
+            char row[80];
+            snprintf(row, sizeof(row), "<li>%d. %s</li>", i + 1, ssid);
+            strncat(list, row, sizeof(list) - strlen(list) - 1);
+        }
+    }
+
     int n = snprintf(page, sizeof(page),
         "<!DOCTYPE html><html><head><meta charset='gb2312'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>WiFi ÅäÖÃ</title></head><body style='font-family:sans-serif'>"
-        "<h2>SD Â¼Òô»ú WiFi ÅäÖÃ</h2>"
-        "<p>µ±Ç° WiFi£º<b>%s</b></p>"
+        "<title>WiFi é…ç½®</title></head><body style='font-family:sans-serif'>"
+        "<h2>å£°è®° VoiceNote Â· WiFi é…ç½®</h2>"
+        "<p>å·²å­˜ WiFiï¼ˆè¿æ¥æ—¶æŒ‰æ­¤é¡ºåºå°è¯•ï¼Œæœ€å¤š 3 ç»„ï¼‰ï¼š</p>"
+        "<ol>%s</ol>"
         "<form action='/save' method='get'>"
-        "<p>ĞÂ WiFi Ãû³Æ£º<br>"
+        "<p>æ–°å¢ WiFi åç§°ï¼ˆå°†æ’åˆ°ç¬¬ 1 ä½ï¼‰ï¼š<br>"
         "<input name='ssid' maxlength='32' style='width:100%%'></p>"
-        "<p>ĞÂ WiFi ÃÜÂë£º<br>"
+        "<p>æ–°å¢ WiFi å¯†ç ï¼š<br>"
         "<input name='pass' maxlength='64' style='width:100%%'></p>"
-        "<p><input type='submit' value='±£´æ²¢ÖØÆô'></p>"
+        "<p><input type='submit' value='ä¿å­˜å¹¶é‡å¯'></p>"
         "</form>"
-        "<p style='color:#888'>±£´æºóÉè±¸»á×Ô¶¯ÖØÆô²¢Á¬½ÓĞÂ WiFi£¬"
-        "IP µØÖ·»áÏÔÊ¾ÔÚÆÁÄ»ÉÏ¡£</p>"
-        "</body></html>", s_cur_ssid);
+        "<p style='color:#888'>ä¿å­˜åè®¾å¤‡ä¼šè‡ªåŠ¨é‡å¯å¹¶ä¾æ¬¡å°è¯•è¿æ¥ï¼Œ"
+        "IP åœ°å€ä¼šæ˜¾ç¤ºåœ¨å±å¹•ä¸Šã€‚è¶…è¿‡ 3 ç»„æ—¶æœ€æ—§çš„è¢«æŒ¤æ‰ã€‚</p>"
+        "</body></html>", list);
     httpd_resp_set_type(req, "text/html; charset=gb2312");
     httpd_resp_send(req, page, n);
     return ESP_OK;
@@ -115,7 +199,7 @@ static esp_err_t handler_save(httpd_req_t *req)
     char ssid[33] = "";
     char pass[65] = "";
 
-    /* ÏÈÈ¡Õû¸ö query ´®£¨Èç "ssid=xxx&pass=yyy"£©£¬ÔÙÖğ¸ö½âÎö¼üÖµ */
+    /* å…ˆå–æ•´ä¸ª query ä¸²ï¼ˆå¦‚ "ssid=xxx&pass=yyy"ï¼‰ï¼Œå†é€ä¸ªè§£æé”®å€¼ */
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         if (httpd_query_key_value(query, "ssid", val, sizeof(val)) == ESP_OK) {
             url_decode(val);
@@ -129,53 +213,55 @@ static esp_err_t handler_save(httpd_req_t *req)
 
     if (ssid[0] == '\0') {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "WiFi Ãû³Æ²»ÄÜÎª¿Õ£¬Çë·µ»ØÖØÌî");
+                            "WiFi åç§°ä¸èƒ½ä¸ºç©ºï¼Œè¯·è¿”å›é‡å¡«");
         return ESP_OK;
     }
 
-    if (!nvs_save(ssid, pass)) {
-        ESP_LOGE(TAG, "NVS ±£´æÊ§°Ü");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "±£´æÊ§°Ü");
+    if (!wifi_cfg_add(ssid, pass)) {
+        ESP_LOGE(TAG, "NVS ä¿å­˜å¤±è´¥");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ä¿å­˜å¤±è´¥");
         return ESP_OK;
     }
-    ESP_LOGI(TAG, "ÒÑ±£´æĞÂ WiFi ÅäÖÃ: %s£¬Éè±¸¼´½«ÖØÆô", ssid);
+    ESP_LOGI(TAG, "å·²æ–°å¢ WiFi é…ç½®: %sï¼Œè®¾å¤‡å³å°†é‡å¯", ssid);
 
     httpd_resp_set_type(req, "text/html; charset=gb2312");
     httpd_resp_send(req,
         "<!DOCTYPE html><html><head><meta charset='gb2312'></head>"
-        "<body style='font-family:sans-serif'><h2>ÒÑ±£´æ£¡</h2>"
-        "<p>Éè±¸ÕıÔÚÖØÆô²¢Á¬½ÓĞÂ WiFi£¬ÉÔµÈ¼¸Ãë¼´¿É¡£</p></body></html>",
+        "<body style='font-family:sans-serif'><h2>å·²ä¿å­˜ï¼</h2>"
+        "<p>è®¾å¤‡æ­£åœ¨é‡å¯å¹¶è¿æ¥æ–° WiFiï¼Œç¨ç­‰å‡ ç§’å³å¯ã€‚</p></body></html>",
         HTTPD_RESP_USE_STRLEN);
 
-    vTaskDelay(pdMS_TO_TICKS(1500));   /* ÈÃä¯ÀÀÆ÷ÏÈÊÕµ½ÏìÓ¦ */
+    vTaskDelay(pdMS_TO_TICKS(1500));   /* è®©æµè§ˆå™¨å…ˆæ”¶åˆ°å“åº” */
     esp_restart();
-    return ESP_OK;                     /* ²»»áÖ´ĞĞµ½ÕâÀï */
+    return ESP_OK;                     /* ä¸ä¼šæ‰§è¡Œåˆ°è¿™é‡Œ */
 }
 
-/* ---------------------------- ÅäÖÃÄ£Ê½ ---------------------------- */
+/* ---------------------------- é…ç½®æ¨¡å¼ ---------------------------- */
 
 static void start_config_mode(void)
 {
     if (s_active) {
+        vTaskDelete(NULL);
         return;
     }
     s_active = true;
 
-    /* ÍøÒ³ÉÏÕ¹Ê¾µ±Ç° WiFi Ãû£¨NVS ÓĞ¾ÍÓÃ£¬Ã»ÓĞÓÃ±àÒëÊ±Ä¬ÈÏÖµ£© */
-    strncpy(s_cur_ssid, WIFI_SSID, sizeof(s_cur_ssid) - 1);
-    s_cur_ssid[sizeof(s_cur_ssid) - 1] = '\0';
+    /* å±•ç¤ºç¬¬ 1 ç»„å·²å­˜ WiFi åï¼ˆNVS æœ‰å°±ç”¨ï¼Œæ²¡æœ‰ç”¨ç¼–è¯‘æ—¶é»˜è®¤å€¼ï¼‰ */
     char tmp_pass[65];
-    wifi_cfg_load(s_cur_ssid, sizeof(s_cur_ssid), tmp_pass, sizeof(tmp_pass));
+    if (!wifi_cfg_get(0, s_cur_ssid, sizeof(s_cur_ssid), tmp_pass, sizeof(tmp_pass))) {
+        strncpy(s_cur_ssid, WIFI_SSID, sizeof(s_cur_ssid) - 1);
+        s_cur_ssid[sizeof(s_cur_ssid) - 1] = '\0';
+    }
 
-    ESP_LOGI(TAG, "===== ½øÈë WiFi ÅäÖÃÄ£Ê½ =====");
+    ESP_LOGI(TAG, "===== è¿›å…¥ WiFi é…ç½®æ¨¡å¼ =====");
     oled_set_ip("192.168.4.1");
     oled_set_state(OLED_ST_CONFIG);
 
-    /* Í£ STA£¬ÇĞ»»ÎªÈÈµã */
+    /* åœ STAï¼Œåˆ‡æ¢ä¸ºçƒ­ç‚¹ */
     esp_wifi_disconnect();
     esp_wifi_stop();
     if (esp_netif_create_default_wifi_ap() == NULL) {
-        ESP_LOGE(TAG, "´´½¨ AP Íø¿¨Ê§°Ü");
+        ESP_LOGE(TAG, "åˆ›å»º AP ç½‘å¡å¤±è´¥");
         return;
     }
 
@@ -189,7 +275,7 @@ static void start_config_mode(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    /* Æô¶¯ÅäÖÃÍøÒ³£¨80 ¶Ë¿Ú£© */
+    /* å¯åŠ¨é…ç½®ç½‘é¡µï¼ˆ80 ç«¯å£ï¼‰ */
     httpd_handle_t server = NULL;
     httpd_config_t http_cfg = HTTPD_DEFAULT_CONFIG();
     ESP_ERROR_CHECK(httpd_start(&server, &http_cfg));
@@ -198,14 +284,20 @@ static void start_config_mode(void)
     httpd_register_uri_handler(server, &uri_home);
     httpd_register_uri_handler(server, &uri_save);
 
-    ESP_LOGI(TAG, "ÈÈµã \"%s\" ÒÑ¿ªÆô£¨ÃÜÂë %s£©", CFG_AP_SSID, CFG_AP_PASSWORD);
-    ESP_LOGI(TAG, "ÇëÁ¬½Ó¸ÃÈÈµãºó·ÃÎÊ http://192.168.4.1 ĞŞ¸Ä WiFi");
+    ESP_LOGI(TAG, "çƒ­ç‚¹ \"%s\" å·²å¼€å¯ï¼ˆå¯†ç  %sï¼‰", CFG_AP_SSID, CFG_AP_PASSWORD);
+    ESP_LOGI(TAG, "è¯·è¿æ¥è¯¥çƒ­ç‚¹åè®¿é—® http://192.168.4.1 ä¿®æ”¹ WiFi");
 
-    /* ÅäÖÃÄ£Ê½³£×¤ÔËĞĞ£¬±£´æºóÓÉ /save ÖØÆôÉè±¸ */
+    /* é…ç½®æ¨¡å¼å¸¸é©»è¿è¡Œï¼Œä¿å­˜åç”± /save é‡å¯è®¾å¤‡ */
     vTaskDelete(NULL);
 }
 
-/* ---------------------------- °´¼üÈÎÎñ ---------------------------- */
+/* ---------------------------- æŒ‰é”®ä»»åŠ¡ ---------------------------- */
+
+/* é…ç½®æ¨¡å¼å…¥å£ä»»åŠ¡ï¼šstart_config_mode æœ«å°¾ vTaskDelete(NULL)ï¼Œä¸ä¼šè¿”å› */
+static void config_task_entry(void *arg)
+{
+    start_config_mode();
+}
 
 static void button_task(void *arg)
 {
@@ -220,21 +312,20 @@ static void button_task(void *arg)
 
     while (1) {
         if (gpio_get_level(CFG_KEY_GPIO) == 0) {
-            vTaskDelay(pdMS_TO_TICKS(30));             /* °´ÏÂÏû¶¶ */
+            vTaskDelay(pdMS_TO_TICKS(30));             /* æŒ‰ä¸‹æ¶ˆæŠ– */
             if (gpio_get_level(CFG_KEY_GPIO) != 0) {
                 continue;
             }
             int ms = 0;
-            while (gpio_get_level(CFG_KEY_GPIO) == 0) { /* ³ÖĞø°´×¡¼ÆÊ± */
+            while (gpio_get_level(CFG_KEY_GPIO) == 0) { /* æŒç»­æŒ‰ä½è®¡æ—¶ */
                 vTaskDelay(pdMS_TO_TICKS(20));
                 ms += 20;
             }
             if (ms >= CFG_KEY_LONGPRESS_MS) {
-                ESP_LOGW(TAG, "³¤°´ %d ms£¬½øÈë WiFi ÅäÖÃÄ£Ê½", ms);
-                start_config_mode();                    /* ÄÚ²¿²»·µ»Ø */
-                continue;
+                ESP_LOGW(TAG, "é•¿æŒ‰ %d msï¼Œè¿›å…¥ WiFi é…ç½®æ¨¡å¼", ms);
+                wifi_cfg_enter_config();                /* å†…éƒ¨åˆ›å»ºç‹¬ç«‹ä»»åŠ¡ */
             }
-            /* ¶Ì°´£ººöÂÔ */
+            /* çŸ­æŒ‰ï¼šå¿½ç•¥ */
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
@@ -243,4 +334,17 @@ static void button_task(void *arg)
 void wifi_cfg_button_start(void)
 {
     xTaskCreatePinnedToCore(button_task, "cfgkey", 3072, NULL, 3, NULL, 0);
+}
+
+/*
+ * è¿›å…¥ WiFi é…ç½®æ¨¡å¼ï¼ˆè‡ªåŠ¨å…œåº•å…¥å£ï¼‰ã€‚
+ * åœ¨ç‹¬ç«‹ä»»åŠ¡é‡Œè¿è¡Œï¼šstart_config_mode æœ«å°¾ä¼š vTaskDelete(NULL)ï¼Œ
+ * ç›´æ¥ä» app_main è°ƒç”¨ä¼šè¯¯åˆ ä¸»ä»»åŠ¡ï¼Œæ‰€ä»¥åŒ…ä¸€å±‚ã€‚
+ */
+void wifi_cfg_enter_config(void)
+{
+    if (s_active) {
+        return;
+    }
+    xTaskCreatePinnedToCore(config_task_entry, "wificfg", 4096, NULL, 3, NULL, 0);
 }
