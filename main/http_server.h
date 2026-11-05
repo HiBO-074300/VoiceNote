@@ -3,8 +3,8 @@
 #include "esp_err.h"
 
 /*
- * HTTP åœ¨çº¿æ’­æ”¾æœåŠ¡ï¼ˆåŸºäº esp_http_serverï¼Œç«¯å£ 80ï¼‰
- * - GET /          å½•éŸ³åˆ—è¡¨ç½‘é¡µï¼Œæµè§ˆå™¨ç‚¹å‡»å³å¯åœ¨çº¿æ’­æ”¾
- * - GET /rec?name=rec001.wav   æµå¼è¿”å› WAV æ–‡ä»¶ï¼Œæ”¯æŒ Rangeï¼ˆå¯æ‹–è¿›åº¦æ¡ï¼‰
+ * HTTP ÔÚÏß²¥·Å·şÎñ£¨»ùÓÚ esp_http_server£¬¶Ë¿Ú 80£©
+ * - GET /          Â¼ÒôÁĞ±íÍøÒ³£¬ä¯ÀÀÆ÷µã»÷¼´¿ÉÔÚÏß²¥·Å
+ * - GET /rec?name=rec001.wav   Á÷Ê½·µ»Ø WAV ÎÄ¼ş£¬Ö§³Ö Range£¨¿ÉÍÏ½ø¶ÈÌõ£©
  */
 esp_err_t http_server_start(const char *root_path);

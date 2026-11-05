@@ -1,9 +1,9 @@
 /*
- * HTTP åœ¨çº¿æ’­æ”¾æœåŠ¡
+ * HTTP ÔÚÏß²¥·Å·şÎñ
  *
- * æµè§ˆå™¨è®¿é—® http://<è®¾å¤‡IP>/ å³å¯åˆ—å‡ºå¹¶åœ¨çº¿æ’­æ”¾å½•éŸ³ã€‚
- * å½•éŸ³ä¸º 16-bit å•å£°é“ PCM WAVï¼Œæµè§ˆå™¨åŸç”Ÿæ”¯æŒã€‚
- * æ–‡ä»¶æ¥å£æ”¯æŒ Range è¯·æ±‚ï¼ˆ206ï¼‰ï¼ŒéŸ³é¢‘å¯æ‹–åŠ¨è¿›åº¦æ¡ã€‚
+ * ä¯ÀÀÆ÷·ÃÎÊ http://<Éè±¸IP>/ ¼´¿ÉÁĞ³ö²¢ÔÚÏß²¥·ÅÂ¼Òô¡£
+ * Â¼ÒôÎª 16-bit µ¥ÉùµÀ PCM WAV£¬ä¯ÀÀÆ÷Ô­ÉúÖ§³Ö¡£
+ * ÎÄ¼ş½Ó¿ÚÖ§³Ö Range ÇëÇó£¨206£©£¬ÒôÆµ¿ÉÍÏ¶¯½ø¶ÈÌõ¡£
  */
 
 #include "http_server.h"
@@ -25,10 +25,10 @@ static char s_http_root[32] = "/sdcard";
 #define HTTP_SEND_BUF   2048
 
 /* =================================================================== */
-/*  å·¥å…·å‡½æ•°                                                            */
+/*  ¹¤¾ßº¯Êı                                                            */
 /* =================================================================== */
 
-/* ä»…å…è®¸ rec*.wav å½¢å¼çš„æ–‡ä»¶åï¼Œé˜²æ­¢è·¯å¾„ç©¿è¶Š */
+/* ½öÔÊĞí rec*.wav ĞÎÊ½µÄÎÄ¼şÃû£¬·ÀÖ¹Â·¾¶´©Ô½ */
 static bool name_safe(const char *name)
 {
     if (name == NULL || name[0] == '\0') return false;
@@ -43,16 +43,16 @@ static bool name_safe(const char *name)
 static const char *html_head =
     "<!DOCTYPE html><html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>å£°è®° VoiceNote</title>"
+    "<title>Éù¼Ç VoiceNote</title>"
     "<style>body{font-family:sans-serif;max-width:640px;margin:16px auto;padding:0 12px;}"
     "h2{color:#345}li{margin:10px 0;list-style:none;border-bottom:1px solid #eee;padding:8px 0;}"
     "audio{width:100%;margin-top:4px;}</style></head><body>"
-    "<h2>å£°è®° VoiceNote Â· å½•éŸ³åˆ—è¡¨</h2><ul>";
+    "<h2>Éù¼Ç VoiceNote ¡¤ Â¼ÒôÁĞ±í</h2><ul>";
 
 static const char *html_tail = "</ul></body></html>";
 
 /* =================================================================== */
-/*  GET /  å½•éŸ³åˆ—è¡¨                                                     */
+/*  GET /  Â¼ÒôÁĞ±í                                                     */
 /* =================================================================== */
 
 static esp_err_t index_handler(httpd_req_t *req)
@@ -74,12 +74,12 @@ static esp_err_t index_handler(httpd_req_t *req)
                              "<audio controls preload='none' src='/rec?name=%s'></audio></li>",
                              ent->d_name, ent->d_name);
             if (n > 0 && httpd_resp_send_chunk(req, row, (ssize_t)MIN(n, sizeof(row))) != ESP_OK) {
-                break;      /* å®¢æˆ·ç«¯æ–­å¼€ */
+                break;      /* ¿Í»§¶Ë¶Ï¿ª */
             }
         }
         closedir(dir);
     } else {
-        const char *err = "<li>æ— æ³•è®¿é—®å­˜å‚¨ç›®å½•</li>";
+        const char *err = "<li>ÎŞ·¨·ÃÎÊ´æ´¢Ä¿Â¼</li>";
         httpd_resp_send_chunk(req, err, strlen(err));
     }
 
@@ -89,7 +89,7 @@ static esp_err_t index_handler(httpd_req_t *req)
 }
 
 /* =================================================================== */
-/*  GET /rec?name=rec001.wav  WAV æµå¼ä¸‹è½½                              */
+/*  GET /rec?name=rec001.wav  WAV Á÷Ê½ÏÂÔØ                              */
 /* =================================================================== */
 
 static esp_err_t wav_handler(httpd_req_t *req)
@@ -128,7 +128,7 @@ static esp_err_t wav_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "audio/wav");
     httpd_resp_set_hdr(req, "Accept-Ranges", "bytes");
 
-    /* ---- Range è¯·æ±‚ï¼ˆæµè§ˆå™¨æ‹–åŠ¨è¿›åº¦æ¡æ—¶å‘é€ï¼‰ ---- */
+    /* ---- Range ÇëÇó£¨ä¯ÀÀÆ÷ÍÏ¶¯½ø¶ÈÌõÊ±·¢ËÍ£© ---- */
     long start = 0;
     long end = fsize - 1;
 
@@ -146,7 +146,7 @@ static esp_err_t wav_handler(httpd_req_t *req)
         }
     }
 
-    /* ---- æµå¼å‘é€ï¼ˆchunkedï¼‰ ---- */
+    /* ---- Á÷Ê½·¢ËÍ£¨chunked£© ---- */
     if (fseek(f, start, SEEK_SET) != 0) {
         fclose(f);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "seek failed");
@@ -176,15 +176,15 @@ static esp_err_t wav_handler(httpd_req_t *req)
     fclose(f);
 
     if (ret == ESP_OK) {
-        httpd_resp_send_chunk(req, NULL, 0);    /* ç»“æŸ chunked å“åº” */
+        httpd_resp_send_chunk(req, NULL, 0);    /* ½áÊø chunked ÏìÓ¦ */
     } else {
-        ESP_LOGW(TAG, "å®¢æˆ·ç«¯ä¸­æ–­: %s", name);
+        ESP_LOGW(TAG, "¿Í»§¶ËÖĞ¶Ï: %s", name);
     }
     return ESP_OK;
 }
 
 /* =================================================================== */
-/*  å¯åŠ¨                                                                */
+/*  Æô¶¯                                                                */
 /* =================================================================== */
 
 esp_err_t http_server_start(const char *root_path)
@@ -196,12 +196,12 @@ esp_err_t http_server_start(const char *root_path)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
-    config.max_open_sockets = 2;    /* ESP32 èµ„æºæœ‰é™ï¼Œå¤Ÿäº† */
+    config.max_open_sockets = 2;    /* ESP32 ×ÊÔ´ÓĞÏŞ£¬¹»ÁË */
 
     httpd_handle_t server = NULL;
     esp_err_t err = httpd_start(&server, &config);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "HTTP æœåŠ¡å™¨å¯åŠ¨å¤±è´¥: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "HTTP ·şÎñÆ÷Æô¶¯Ê§°Ü: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -214,6 +214,6 @@ esp_err_t http_server_start(const char *root_path)
     httpd_register_uri_handler(server, &uri_index);
     httpd_register_uri_handler(server, &uri_wav);
 
-    ESP_LOGI(TAG, "HTTP åœ¨çº¿æ’­æ”¾æœåŠ¡å·²å¯åŠ¨ï¼Œæ ¹ç›®å½•: %s", s_http_root);
+    ESP_LOGI(TAG, "HTTP ÔÚÏß²¥·Å·şÎñÒÑÆô¶¯£¬¸ùÄ¿Â¼: %s", s_http_root);
     return ESP_OK;
 }

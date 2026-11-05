@@ -1,11 +1,11 @@
 /*
- * ESP32 å½•éŸ³åˆ° SD å¡ï¼ˆWAV æ ¼å¼ï¼Œ16bit å•å£°é“ PCMï¼‰
- * å½•å¥½çš„æ–‡ä»¶å¯é€šè¿‡å±€åŸŸç½‘ FTP æ— çº¿è®¿é—®ï¼ˆè§ä¸‹é¢"æ— çº¿è®¿é—®"é…ç½®ï¼‰
+ * ESP32 Â¼Òôµ½ SD ¿¨£¨WAV ¸ñÊ½£¬16bit µ¥ÉùµÀ PCM£©
+ * Â¼ºÃµÄÎÄ¼ş¿ÉÍ¨¹ı¾ÖÓòÍø FTP ÎŞÏß·ÃÎÊ£¨¼ûÏÂÃæ"ÎŞÏß·ÃÎÊ"ÅäÖÃ£©
  *
- * æ”¯æŒ 3 ç§éº¦å…‹é£ï¼Œæ”¹ä¸‹é¢ MIC_TYPE ä¸€è¡Œå³å¯ï¼š
- *   MIC_I2S_STD : I2S æ•°å­—ç¡…éº¦ï¼Œå¦‚ INMP441 / SPH0645 / MSM261S4030 / ICS-43434
- *   MIC_PDM     : PDM æ•°å­—ç¡…éº¦ï¼Œå¦‚ MP34DT01 / IM69D130 / SPK0415HM4H
- *   MIC_ADC     : æ¨¡æ‹Ÿè¾“å‡ºéº¦å…‹é£ï¼Œå¦‚ MAX9814 / MAX4466 / æ¨¡æ‹Ÿç¡…éº¦æ”¾å¤§æ¿
+ * Ö§³Ö 3 ÖÖÂó¿Ë·ç£¬¸ÄÏÂÃæ MIC_TYPE Ò»ĞĞ¼´¿É£º
+ *   MIC_I2S_STD : I2S Êı×Ö¹èÂó£¬Èç INMP441 / SPH0645 / MSM261S4030 / ICS-43434
+ *   MIC_PDM     : PDM Êı×Ö¹èÂó£¬Èç MP34DT01 / IM69D130 / SPK0415HM4H
+ *   MIC_ADC     : Ä£ÄâÊä³öÂó¿Ë·ç£¬Èç MAX9814 / MAX4466 / Ä£Äâ¹èÂó·Å´ó°å
  */
 
 #include <stdio.h>
@@ -13,9 +13,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <math.h>
+#include <stdbool.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_netif.h"
@@ -25,6 +28,7 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
+#include "lwip/sockets.h"
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "driver/i2s_pdm.h"
@@ -39,53 +43,62 @@
 
 static const char *TAG = "recorder";
 
-/* ============================ ç”¨æˆ·é…ç½®åŒº ============================ */
+/* ============================ ÓÃ»§ÅäÖÃÇø ============================ */
 
 #define MIC_I2S_STD  1
 #define MIC_PDM      2
 #define MIC_ADC      3
 
-/* ä½ çš„éº¦å…‹é£ç±»å‹ */
+/* ÄãµÄÂó¿Ë·çÀàĞÍ */
 #define MIC_TYPE     MIC_I2S_STD
 
-/* å½•éŸ³å‚æ•° */
-#define RECORD_MAX_SECONDS  600     // å•æ®µæœ€é•¿æ—¶é•¿ï¼ˆç§’ï¼‰ï¼Œé˜²æ­¢å¿˜äº†æŒ‰åœæ­¢æŠŠå¡å†™æ»¡ï¼›0 = ä¸é™æ—¶é•¿
-#define RECORD_BUF_SAMPLES  1024    // æ¯æ‰¹è¯»å–çš„é‡‡æ ·ç‚¹æ•°
+/* Â¼Òô²ÎÊı */
+#define RECORD_MAX_SECONDS  600     // µ¥¶Î×î³¤Ê±³¤£¨Ãë£©£¬·ÀÖ¹ÍüÁË°´Í£Ö¹°Ñ¿¨Ğ´Âú£»0 = ²»ÏŞÊ±³¤
+#define RECORD_BUF_SAMPLES  1024    // Ã¿Åú¶ÁÈ¡µÄ²ÉÑùµãÊı
 
-/* SD å¡ SPI å¼•è„šï¼ˆVSPI é»˜è®¤è„šï¼Œå¯æ”¹ï¼‰ */
+/* SD ¿¨ SPI Òı½Å£¨VSPI Ä¬ÈÏ½Å£¬¿É¸Ä£© */
 #define SD_PIN_CS     5
 #define SD_PIN_MOSI   23
 #define SD_PIN_MISO   19
 #define SD_PIN_SCLK   18
 #define SD_MOUNT_POINT  "/sdcard"
 
-/* éº¦å…‹é£å¼•è„š */
-#define MIC_PIN_BCLK  26            // I2S: BCLK(SCK)   PDM: CLK
-#define MIC_PIN_WS    25            // I2S: WS(LRCLK)   PDM: ä¸ç”¨
-#define MIC_PIN_DIN   22            // I2S: SD(æ•°æ®å‡º)  PDM: DAT
-#define MIC_ADC_UNIT      ADC_UNIT_1
-#define MIC_ADC_CHANNEL   ADC_CHANNEL_6   // GPIO34ï¼ˆADC1_CH6ï¼‰
+/* SD ¿¨²åÈë¼ì²â£¨GPIO34£©£º¸ßµçÆ½=Î´²åÈë£¬µÍµçÆ½=ÒÑ²åÈë
+ * GPIO34 ÎŞÄÚ²¿ÉÏÏÂÀ­£¬ĞèÍâ²¿ 10k ÉÏÀ­µ½ 3.3V£¬¿¨×ù CD ¿ª¹Ø½Ó GND */
+#define SD_PIN_CD    34
 
-/* BOOT é”®ï¼ˆGPIO0ï¼‰ï¼šæŒ‰ä¸€ä¸‹å¼€å§‹å½•éŸ³ï¼Œå½•éŸ³ä¸­å†æŒ‰ä¸€ä¸‹åœæ­¢å¹¶ä¿å­˜ */
+/* Âó¿Ë·çÒı½Å */
+#define MIC_PIN_BCLK  26            // I2S: BCLK(SCK)   PDM: CLK
+#define MIC_PIN_WS    25            // I2S: WS(LRCLK)   PDM: ²»ÓÃ
+#define MIC_PIN_DIN   22            // I2S: SD(Êı¾İ³ö)  PDM: DAT
+#define MIC_ADC_UNIT      ADC_UNIT_1
+#define MIC_ADC_CHANNEL   ADC_CHANNEL_6   // GPIO34£¨ADC1_CH6£©
+
+/* BOOT ¼ü£¨GPIO0£©£º°´Ò»ÏÂ¿ªÊ¼Â¼Òô£¬Â¼ÒôÖĞÔÙ°´Ò»ÏÂÍ£Ö¹²¢±£´æ */
 #define KEY_GPIO      GPIO_NUM_0
 
-/* çŠ¶æ€æŒ‡ç¤ºç¯ï¼ˆåŒç¯ï¼Œé«˜ç”µå¹³ç‚¹äº®ï¼‰
- *   LED1 GPIO17 ç³»ç»Ÿç¯ï¼šå¸¸äº® = å¯å½•éŸ³ï¼ˆç©ºé—²å¾…æœºï¼‰ï¼›ç†„ç­ = å­˜å‚¨å¼‚å¸¸
- *   LED2 GPIO16 å½•éŸ³ç¯ï¼šé—ªçƒ = æ­£åœ¨å½•éŸ³ï¼›ç†„ç­ = ç©ºé—²
- * è‹¥ LED é˜´ææ¥å¼•è„šï¼ˆä½ç”µå¹³ç‚¹äº®ï¼‰ï¼ŒæŠŠ LED_ACTIVE_LEVEL æ”¹æˆ 0
+/* OLED ÏÔÊ¾¿ª¹Ø£ºÖÃ 0 ÍêÈ«²»´´½¨ÏÔÊ¾ÈÎÎñ£¬I2C ÏßÁã·­×ª¡£
+   ÒÑÈ·ÈÏ£ºI2C ·­×ª»á´®ÈÅ½øÂó¿Ë·ç²úÉúÔëÉù£¨Óë I2S ÏßÀëµÃ½ü£©£¬
+   Òò´Ë»Ö¸´ÏÔÊ¾µÄÍ¬Ê±°Ñ I2C ½µµ½ 100kHz£¨¼û oled.c µÄ OLED_FREQ_HZ£© */
+#define ENABLE_OLED   1
+
+/* ×´Ì¬Ö¸Ê¾µÆ£¨Ë«µÆ£¬¸ßµçÆ½µãÁÁ£©
+ *   LED1 GPIO17 ÏµÍ³µÆ£º³£ÁÁ = ¿ÉÂ¼Òô£¨¿ÕÏĞ´ı»ú£©£»Ï¨Ãğ = ´æ´¢Òì³£
+ *   LED2 GPIO16 Â¼ÒôµÆ£ºÉÁË¸ = ÕıÔÚÂ¼Òô£»Ï¨Ãğ = ¿ÕÏĞ
+ * Èô LED Òõ¼«½ÓÒı½Å£¨µÍµçÆ½µãÁÁ£©£¬°Ñ LED_ACTIVE_LEVEL ¸Ä³É 0
  */
 #define LED1_GPIO            GPIO_NUM_17
 #define LED2_GPIO            GPIO_NUM_16
 #define LED_ACTIVE_LEVEL     1
-#define LED_BLINK_MS         500    // é—ªçƒåŠå‘¨æœŸï¼ˆæ¯«ç§’ï¼‰
+#define LED_BLINK_MS         500    // ÉÁË¸°ëÖÜÆÚ£¨ºÁÃë£©
 
-/* å½•éŸ³è¿‡ç¨‹ä¸­æ¯éš”å¤šå°‘ç§’æŠŠæ•°æ®åˆ·åˆ°å¡ä¸Šå¹¶å›å¡« WAV å¤´ï¼ˆé˜²æ­¢çªç„¶æ–­ç”µ/æ‹”å¡äº§ç”Ÿåæ–‡ä»¶ï¼‰ */
+/* Â¼Òô¹ı³ÌÖĞÃ¿¸ô¶àÉÙÃë°ÑÊı¾İË¢µ½¿¨ÉÏ²¢»ØÌî WAV Í·£¨·ÀÖ¹Í»È»¶Ïµç/°Î¿¨²úÉú»µÎÄ¼ş£© */
 #define RECORD_SYNC_SECONDS  5
 
-/* æ•°å­—éº¦å…‹é£å¢ç›Šï¼š1=åŸå§‹ï¼Œ2/4/8=æ”¾å¤§ï¼ˆå£°éŸ³å¤ªå°å°±è°ƒå¤§ï¼Œçˆ†éŸ³å°±è°ƒå°ï¼‰ */
+/* Êı×ÖÂó¿Ë·çÔöÒæ£º1=Ô­Ê¼£¬2/4/8=·Å´ó£¨ÉùÒôÌ«Ğ¡¾Íµ÷´ó£¬±¬Òô¾Íµ÷Ğ¡£© */
 #define MIC_DIGITAL_GAIN  1
 
-/* æ— çº¿è®¿é—®ï¼ˆWiFi åç§°/å¯†ç ã€FTP è´¦å·ï¼‰ç»Ÿä¸€åœ¨ config.h é‡Œé…ç½® */
+/* ÎŞÏß·ÃÎÊ£¨WiFi Ãû³Æ/ÃÜÂë¡¢FTP ÕËºÅ£©Í³Ò»ÔÚ config.h ÀïÅäÖÃ */
 
 /* =================================================================== */
 
@@ -120,17 +133,38 @@ static adc_continuous_handle_t s_adc_handle = NULL;
 static sdmmc_card_t         *s_card = NULL;
 static sdmmc_host_t          s_host = SDSPI_HOST_DEFAULT();
 
-/* LED çŠ¶æ€ï¼šç”± record_task è®¾ç½®ï¼Œled_task æ‰§è¡Œ */
+/* LED ×´Ì¬£ºÓÉ record_task ÉèÖÃ£¬led_task Ö´ĞĞ */
 typedef enum {
-    LED_MODE_OFF = 0,       // ä¸å¯å½•éŸ³ï¼šç†„ç­
-    LED_MODE_ON,            // å¯å½•éŸ³ï¼ˆç©ºé—²å¾…æœºï¼‰ï¼šå¸¸äº®
-    LED_MODE_BLINK,         // æ­£åœ¨å½•éŸ³ï¼šé—ªçƒ
+    LED_MODE_OFF = 0,       // ²»¿ÉÂ¼Òô£ºÏ¨Ãğ
+    LED_MODE_ON,            // ¿ÉÂ¼Òô£¨¿ÕÏĞ´ı»ú£©£º³£ÁÁ
+    LED_MODE_BLINK,         // ÕıÔÚÂ¼Òô£ºÉÁË¸
+    LED_MODE_SLOW,          // Â¼ÒôÔİÍ££ºÏµÍ³µÆ³£ÁÁ£¬Â¼ÒôµÆÂıÉÁ
 } led_mode_t;
 
 static volatile led_mode_t s_led_mode = LED_MODE_OFF;
-static volatile bool       s_storage_ok = false;   // å­˜å‚¨æ˜¯å¦å¯ç”¨ï¼ˆä¸å¯ç”¨åˆ™æŒ‰é”®æ— æ•ˆï¼‰
+static volatile bool       s_storage_ok = false;   // ´æ´¢ÊÇ·ñ¿ÉÓÃ£¨²»¿ÉÓÃÔò°´¼üÎŞĞ§£©
+static bool                s_spi_bus_ready = false; // SPI ×ÜÏßÊÇ·ñÒÑ³õÊ¼»¯£¨ÖØĞÂ¹ÒÔØÊ±Ìø¹ı£©
+static volatile bool       s_rec_pause_req = false; // GPIO33 ¶Ì°´ÇëÇó£ºÔİÍ£/¼ÌĞøÇĞ»»
+static volatile bool       s_recording_active = false; // ÕıÔÚÂ¼Òô£¨UDP ´«ÉùÈÎÎñÈÃÂ·ÓÃ£©
 
-/* ---------------------------- WAV å¤´ ---------------------------- */
+/* ------------------------- SD ¿¨²åÈë¼ì²â ------------------------- */
+
+static bool sd_card_inserted(void)
+{
+    return gpio_get_level((gpio_num_t)SD_PIN_CD) == 0;
+}
+
+/* Á½´Î¶ÁÈ¡¼ä¸ô 50ms ¾ùÎªµÍµçÆ½²ÅËãÒÑ²åÈë£¨¼òµ¥Ïû¶¶£© */
+static bool sd_card_inserted_stable(void)
+{
+    if (!sd_card_inserted()) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return sd_card_inserted();
+}
+
+/* ---------------------------- WAV Í· ---------------------------- */
 
 static wav_header_t make_wav_header(uint32_t data_bytes)
 {
@@ -152,7 +186,7 @@ static wav_header_t make_wav_header(uint32_t data_bytes)
     return h;
 }
 
-/* ---------------------------- LED æŒ‡ç¤º ---------------------------- */
+/* ---------------------------- LED Ö¸Ê¾ ---------------------------- */
 
 static void led_write(int idx, bool on)
 {
@@ -170,18 +204,19 @@ static void led_init(void)
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&cfg);
-    led_write(1, false);                // ä¸Šç”µå…ˆç†„ç­ = "è¿˜ä¸èƒ½å½•éŸ³"
+    led_write(1, false);                // ÉÏµçÏÈÏ¨Ãğ = "»¹²»ÄÜÂ¼Òô"
     led_write(2, false);
 }
 
-/* LED ä»»åŠ¡ï¼šLED1 åæ˜ ç³»ç»ŸçŠ¶æ€ï¼ŒLED2 åæ˜ å½•éŸ³çŠ¶æ€ï¼›é…ç½®æ¨¡å¼ä¸‹ LED1 å¿«é—ª */
+/* LED ÈÎÎñ£ºLED1 ·´Ó³ÏµÍ³×´Ì¬£¬LED2 ·´Ó³Â¼Òô×´Ì¬£»ÅäÖÃÄ£Ê½ÏÂ LED1 ¿ìÉÁ */
 static void led_task(void *arg)
 {
     bool blink_on = false;
+    int  slow_cnt = 0;
 
     while (1) {
         if (wifi_cfg_is_active()) {
-            /* WiFi é…ç½®æ¨¡å¼ï¼šLED1 å¿«é—ªæç¤ºï¼ŒLED2 ç†„ç­ */
+            /* WiFi ÅäÖÃÄ£Ê½£ºLED1 ¿ìÉÁÌáÊ¾£¬LED2 Ï¨Ãğ */
             blink_on = !blink_on;
             led_write(1, blink_on);
             led_write(2, false);
@@ -198,6 +233,16 @@ static void led_task(void *arg)
                 led_write(2, blink_on);
                 break;
 
+            case LED_MODE_SLOW:
+                /* ÂıÉÁ£¨Ô¼ 2 ÃëÒ»¸öÖÜÆÚ£©£ºÔİÍ£×´Ì¬ */
+                if (++slow_cnt >= 4) {
+                    slow_cnt = 0;
+                    blink_on = !blink_on;
+                }
+                led_write(1, true);
+                led_write(2, blink_on);
+                break;
+
             case LED_MODE_OFF:
             default:
                 led_write(1, false);
@@ -209,22 +254,22 @@ static void led_task(void *arg)
     }
 }
 
-/* ---------------------------- SD å¡æŒ‚è½½ ---------------------------- */
+/* ---------------------------- SD ¿¨¹ÒÔØ ---------------------------- */
 
 /*
- * SD å¡é¢‘ç‡ç­–ç•¥ï¼š
- *   1) å…ˆç”¨ 400 kHz æ¡æ‰‹æŒ‚è½½ â€”â€” åŠ£è´¨å¡ / é•¿çº¿åªæœ‰è¿™ä¸ªé¢‘ç‡èƒ½æ¡ä¸Š
- *   2) æŒ‚è½½æˆåŠŸåé€æ¡£æé€Ÿï¼Œæ¯æ¡£å¿…é¡»ã€Œè¯» 3 æ¬¡æ‰‡åŒºå…¨è¿‡ã€æ‰ç®—ç¨³ï¼Œå¦åˆ™é€€å›ä¸Šä¸€æ¡£
- * è¿™æ ·å°±ä¸ä¼šå‡ºç°"æŒ‚ä¸Šäº†å´è¢«å¼ºè¡Œæ‹‰åˆ°è·‘ä¸åŠ¨çš„é«˜é¢‘ï¼Œç„¶åè¯»å†™å…¨ CRC æŠ¥é”™"çš„æƒ…å†µ
+ * SD ¿¨ÆµÂÊ²ßÂÔ£º
+ *   1) ÏÈÓÃ 400 kHz ÎÕÊÖ¹ÒÔØ ¡ª¡ª ÁÓÖÊ¿¨ / ³¤ÏßÖ»ÓĞÕâ¸öÆµÂÊÄÜÎÕÉÏ
+ *   2) ¹ÒÔØ³É¹¦ºóÖğµµÌáËÙ£¬Ã¿µµ±ØĞë¡¸¶Á 3 ´ÎÉÈÇøÈ«¹ı¡¹²ÅËãÎÈ£¬·ñÔòÍË»ØÉÏÒ»µµ
+ * ÕâÑù¾Í²»»á³öÏÖ"¹ÒÉÏÁËÈ´±»Ç¿ĞĞÀ­µ½ÅÜ²»¶¯µÄ¸ßÆµ£¬È»ºó¶ÁĞ´È« CRC ±¨´í"µÄÇé¿ö
  */
 static const int SD_FREQ_STEPS[] = {4000, 10000, 20000};
 
-/* æŠŠå¡æ—¶é’Ÿè®¾åˆ° freq_khzï¼Œå¹¶è¯»æ‰‡åŒºæ ¡éªŒï¼›å¤±è´¥è‡ªåŠ¨é€€å› fallback_khz */
+/* °Ñ¿¨Ê±ÖÓÉèµ½ freq_khz£¬²¢¶ÁÉÈÇøĞ£Ñé£»Ê§°Ü×Ô¶¯ÍË»Ø fallback_khz */
 static bool try_card_freq(int freq_khz, int fallback_khz)
 {
     esp_err_t err = sdspi_host_set_card_clk(s_host.slot, freq_khz);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "è®¾ç½® %d kHz å¤±è´¥: %s", freq_khz, esp_err_to_name(err));
+        ESP_LOGW(TAG, "ÉèÖÃ %d kHz Ê§°Ü: %s", freq_khz, esp_err_to_name(err));
         return false;
     }
     vTaskDelay(pdMS_TO_TICKS(5));
@@ -245,7 +290,7 @@ static bool try_card_freq(int freq_khz, int fallback_khz)
     free(buf);
 
     if (!ok) {
-        ESP_LOGW(TAG, "%d kHz è¯»å†™æ ¡éªŒå¤±è´¥ï¼ˆCRC é”™è¯¯ï¼‰ï¼Œé€€å› %d kHz", freq_khz, fallback_khz);
+        ESP_LOGW(TAG, "%d kHz ¶ÁĞ´Ğ£ÑéÊ§°Ü£¨CRC ´íÎó£©£¬ÍË»Ø %d kHz", freq_khz, fallback_khz);
         sdspi_host_set_card_clk(s_host.slot, fallback_khz);
         vTaskDelay(pdMS_TO_TICKS(5));
     }
@@ -255,8 +300,8 @@ static bool try_card_freq(int freq_khz, int fallback_khz)
 static esp_err_t mount_sdcard(void)
 {
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = false,   // å¡åäº†ä¸è‡ªåŠ¨æ ¼å¼åŒ–ï¼Œé¿å…è¯¯åˆ æ•°æ®
-        .max_files = 8,                    // å½•éŸ³ 1 ä¸ª + FTP ä¸‹è½½/ä¸Šä¼ /åˆ—ç›®å½•å„å å¥æŸ„
+        .format_if_mount_failed = false,   // ¿¨»µÁË²»×Ô¶¯¸ñÊ½»¯£¬±ÜÃâÎóÉ¾Êı¾İ
+        .max_files = 8,                    // Â¼Òô 1 ¸ö + FTP ÏÂÔØ/ÉÏ´«/ÁĞÄ¿Â¼¸÷Õ¼¾ä±ú
         .allocation_unit_size = 16 * 1024
     };
 
@@ -268,55 +313,67 @@ static esp_err_t mount_sdcard(void)
         .quadhd_io_num = -1,
         .max_transfer_sz = 4000,
     };
-    esp_err_t ret = spi_bus_initialize(s_host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI æ€»çº¿åˆå§‹åŒ–å¤±è´¥: %s", esp_err_to_name(ret));
-        return ret;
+    esp_err_t ret;
+
+    /* SPI ×ÜÏßÖ»Ğè³õÊ¼»¯Ò»´Î£»ÖØĞÂ¹ÒÔØÊ±Ìø¹ı£¨ÒÑ¹ÒÔØ»á·µ»Ø INVALID_STATE£© */
+    if (!s_spi_bus_ready) {
+        ret = spi_bus_initialize(s_host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "SPI ×ÜÏß³õÊ¼»¯Ê§°Ü: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        s_spi_bus_ready = true;
+    }
+
+    /* ÖØĞÂ²å¿¨³¡¾°£ºÏÈĞ¶ÔØÉÏÒ»´ÎµÄ¹ÒÔØµã£¬±ÜÃâ VFS ÖØ¸´×¢²áÊ§°Ü */
+    if (s_card != NULL) {
+        esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, s_card);
+        s_card = NULL;
     }
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = SD_PIN_CS;
     slot_config.host_id = s_host.slot;
 
-    vTaskDelay(pdMS_TO_TICKS(500));        // ç­‰å¡ç”µæºç¨³å®šï¼ŒåŠ£è´¨å¡ä¸Šç”µæ…¢
+    vTaskDelay(pdMS_TO_TICKS(500));        // µÈ¿¨µçÔ´ÎÈ¶¨£¬ÁÓÖÊ¿¨ÉÏµçÂı
 
-    /* æ¡æ‰‹é˜¶æ®µå¼ºåˆ¶æœ€ä½é€Ÿ */
+    /* ÎÕÊÖ½×¶ÎÇ¿ÖÆ×îµÍËÙ */
     s_host.max_freq_khz = SDMMC_FREQ_PROBING;         // 400 kHz
-    ESP_LOGI(TAG, "ä»¥ 400 kHz æ¡æ‰‹æŒ‚è½½ SD å¡...");
+    ESP_LOGI(TAG, "ÒÔ 400 kHz ÎÕÊÖ¹ÒÔØ SD ¿¨...");
 
     ret = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &s_host, &slot_config, &mount_config, &s_card);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "400 kHz éƒ½æŒ‚ä¸ä¸Š: %s", esp_err_to_name(ret));
-        ESP_LOGE(TAG, "è¯·æ£€æŸ¥ï¼š");
-        ESP_LOGE(TAG, "  1) MISO(GPIO19) æœ‰æ²¡æœ‰ 10k ä¸Šæ‹‰åˆ° 3.3Vï¼ˆå¾ˆå¤šè£¸å¡åº§æ¨¡å—æ²¡æœ‰ï¼‰");
-        ESP_LOGE(TAG, "  2) æ¥çº¿æ˜¯å¦æ¾åŠ¨ã€çº¿æ˜¯å¦å¤ªé•¿äº†ï¼ˆå»ºè®® <10cmï¼‰");
-        ESP_LOGE(TAG, "  3) å¡æ˜¯å¦ FAT32 æ ¼å¼ã€ä¾›ç”µæ˜¯å¦å……è¶³ï¼ˆå†™å¡å³°å€¼å‡ ç™¾ mAï¼‰");
-        ESP_LOGE(TAG, "  4) å¡æœ¬èº«å¤ªæ—§/æŸåï¼šå¯æŠŠ mount_sdcard() é‡Œ format_if_mount_failed æ”¹æˆ true è‡ªåŠ¨æ ¼å¼åŒ–ï¼ˆä¼šæ¸…ç©ºæ•°æ®ï¼‰");
+        ESP_LOGE(TAG, "400 kHz ¶¼¹Ò²»ÉÏ: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Çë¼ì²é£º");
+        ESP_LOGE(TAG, "  1) MISO(GPIO19) ÓĞÃ»ÓĞ 10k ÉÏÀ­µ½ 3.3V£¨ºÜ¶àÂã¿¨×ùÄ£¿éÃ»ÓĞ£©");
+        ESP_LOGE(TAG, "  2) ½ÓÏßÊÇ·ñËÉ¶¯¡¢ÏßÊÇ·ñÌ«³¤ÁË£¨½¨Òé <10cm£©");
+        ESP_LOGE(TAG, "  3) ¿¨ÊÇ·ñ FAT32 ¸ñÊ½¡¢¹©µçÊÇ·ñ³ä×ã£¨Ğ´¿¨·åÖµ¼¸°Ù mA£©");
+        ESP_LOGE(TAG, "  4) ¿¨±¾ÉíÌ«¾É/Ëğ»µ£º¿É°Ñ mount_sdcard() Àï format_if_mount_failed ¸Ä³É true ×Ô¶¯¸ñÊ½»¯£¨»áÇå¿ÕÊı¾İ£©");
         return ret;
     }
-    ESP_LOGI(TAG, "SD å¡æ¡æ‰‹æˆåŠŸï¼Œå¼€å§‹é€æ¡£æé€Ÿ...");
+    ESP_LOGI(TAG, "SD ¿¨ÎÕÊÖ³É¹¦£¬¿ªÊ¼ÖğµµÌáËÙ...");
 
-    int stable_freq = SDMMC_FREQ_PROBING;             // 400 kHz ä¸€å®šèƒ½ç”¨
+    int stable_freq = SDMMC_FREQ_PROBING;             // 400 kHz Ò»¶¨ÄÜÓÃ
     for (int i = 0; i < sizeof(SD_FREQ_STEPS) / sizeof(SD_FREQ_STEPS[0]); i++) {
         if (!try_card_freq(SD_FREQ_STEPS[i], stable_freq)) {
             break;
         }
         stable_freq = SD_FREQ_STEPS[i];
-        ESP_LOGI(TAG, "æé€Ÿåˆ° %d kHzï¼Œè¯»å†™æ ¡éªŒé€šè¿‡", stable_freq);
+        ESP_LOGI(TAG, "ÌáËÙµ½ %d kHz£¬¶ÁĞ´Ğ£ÑéÍ¨¹ı", stable_freq);
     }
 
-    ESP_LOGI(TAG, "SD å¡æœ€ç»ˆå·¥ä½œé¢‘ç‡: %d kHz", stable_freq);
+    ESP_LOGI(TAG, "SD ¿¨×îÖÕ¹¤×÷ÆµÂÊ: %d kHz", stable_freq);
     if (stable_freq < 4000) {
-        ESP_LOGW(TAG, "é¢‘ç‡è¿‡ä½ï¼ˆ400 kHzï¼‰ï¼Œå†™å¡å¯èƒ½è·Ÿä¸ä¸Šå½•éŸ³é€Ÿç‡ï¼Œå»ºè®®æ”¹å–„æ¥çº¿åå†è¯•");
+        ESP_LOGW(TAG, "ÆµÂÊ¹ıµÍ£¨400 kHz£©£¬Ğ´¿¨¿ÉÄÜ¸ú²»ÉÏÂ¼ÒôËÙÂÊ£¬½¨Òé¸ÄÉÆ½ÓÏßºóÔÙÊÔ");
     } else if (stable_freq < 10000) {
-        ESP_LOGW(TAG, "é¢‘ç‡åä½ï¼ˆ%d kHzï¼‰ï¼Œå½•éŸ³å‹‰å¼ºå¤Ÿç”¨ï¼›å»ºè®®ç¼©çŸ­æ¥çº¿ / MISO åŠ  10k ä¸Šæ‹‰ä»¥æé€Ÿ", stable_freq);
+        ESP_LOGW(TAG, "ÆµÂÊÆ«µÍ£¨%d kHz£©£¬Â¼ÒôÃãÇ¿¹»ÓÃ£»½¨ÒéËõ¶Ì½ÓÏß / MISO ¼Ó 10k ÉÏÀ­ÒÔÌáËÙ", stable_freq);
     }
 
     sdmmc_card_print_info(stdout, s_card);
     return ESP_OK;
 }
 
-/* ---------------------------- éº¦å…‹é£åˆå§‹åŒ– ---------------------------- */
+/* ---------------------------- Âó¿Ë·ç³õÊ¼»¯ ---------------------------- */
 
 #if MIC_TYPE == MIC_I2S_STD
 static esp_err_t mic_init(void)
@@ -326,9 +383,9 @@ static esp_err_t mic_init(void)
 
     i2s_std_config_t std_cfg = {
         .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
-        /* INMP441ï¼š24 ä½æ•°æ®åœ¨ 32 ä½æ§½ä½çš„é«˜ 24 ä½ã€‚
-           ç”¨ç«‹ä½“å£°å¸§æ˜¯ä¸ºäº†è®© BCLK = 64 * fsï¼ˆINMP441 è¦æ±‚ SCK = 64 * é‡‡æ ·ç‡ï¼‰ï¼Œ
-           INMP441 åªåœ¨ WS ä½ç”µå¹³è¾“å‡ºï¼ˆL/R æ¥åœ° = å·¦å£°é“ï¼‰ï¼Œæ‰€ä»¥åªå–å·¦å£°é“ï¼Œå³å£°é“ä¸¢å¼ƒ */
+        /* INMP441£º24 Î»Êı¾İÔÚ 32 Î»²ÛÎ»µÄ¸ß 24 Î»¡£
+           ÓÃÁ¢ÌåÉùÖ¡ÊÇÎªÁËÈÃ BCLK = 64 * fs£¨INMP441 ÒªÇó SCK = 64 * ²ÉÑùÂÊ£©£¬
+           INMP441 Ö»ÔÚ WS µÍµçÆ½Êä³ö£¨L/R ½ÓµØ = ×óÉùµÀ£©£¬ËùÒÔÖ»È¡×óÉùµÀ£¬ÓÒÉùµÀ¶ªÆú */
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
@@ -345,7 +402,7 @@ static esp_err_t mic_init(void)
     };
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_rx_chan, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(s_rx_chan));
-    ESP_LOGI(TAG, "I2S æ•°å­—éº¦å…‹é£å·²å°±ç»ª @ %d Hz", SAMPLE_RATE);
+    ESP_LOGI(TAG, "I2S Êı×ÖÂó¿Ë·çÒÑ¾ÍĞ÷ @ %d Hz", SAMPLE_RATE);
     return ESP_OK;
 }
 #endif
@@ -359,7 +416,7 @@ static esp_err_t mic_init(void)
     i2s_pdm_rx_config_t pdm_cfg = {
         .clk_cfg = I2S_PDM_RX_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
 #if SOC_I2S_SUPPORTS_PDM2PCM
-        /* å·¦å£°é“ = éº¦å…‹é£ SEL/LR å¼•è„šæ¥åœ° */
+        /* ×óÉùµÀ = Âó¿Ë·ç SEL/LR Òı½Å½ÓµØ */
         .slot_cfg = I2S_PDM_RX_SLOT_PCM_FMT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
 #else
         .slot_cfg = I2S_PDM_RX_SLOT_RAW_FMT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
@@ -372,7 +429,7 @@ static esp_err_t mic_init(void)
     };
     ESP_ERROR_CHECK(i2s_channel_init_pdm_rx_mode(s_rx_chan, &pdm_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(s_rx_chan));
-    ESP_LOGI(TAG, "PDM æ•°å­—éº¦å…‹é£å·²å°±ç»ª @ %d Hz", SAMPLE_RATE);
+    ESP_LOGI(TAG, "PDM Êı×ÖÂó¿Ë·çÒÑ¾ÍĞ÷ @ %d Hz", SAMPLE_RATE);
     return ESP_OK;
 }
 #endif
@@ -400,20 +457,40 @@ static esp_err_t mic_init(void)
     dig_cfg.pattern_num = 1;
     ESP_ERROR_CHECK(adc_continuous_config(s_adc_handle, &dig_cfg));
     ESP_ERROR_CHECK(adc_continuous_start(s_adc_handle));
-    ESP_LOGI(TAG, "æ¨¡æ‹Ÿéº¦å…‹é£(ADC) å·²å°±ç»ª @ %d Hz", SAMPLE_RATE);
+    ESP_LOGI(TAG, "Ä£ÄâÂó¿Ë·ç(ADC) ÒÑ¾ÍĞ÷ @ %d Hz", SAMPLE_RATE);
     return ESP_OK;
 }
 #endif
 
-/* ---------------------------- è¯»å–é‡‡æ ·ç‚¹ ---------------------------- */
-/* ç»Ÿä¸€æ¥å£ï¼šè¯»å‡º int16 PCMï¼Œout_samples è¿”å›å®é™…ç‚¹æ•° */
+/* ---------------------------- ¶ÁÈ¡²ÉÑùµã ---------------------------- */
+/* Í³Ò»½Ó¿Ú£º¶Á³ö int16 PCM£¬out_samples ·µ»ØÊµ¼ÊµãÊı */
+
+/*
+ * mic_read »¥³â°ü×°£ºÂ¼ÒôÈÎÎñºÍ UDP ´«ÉùÈÎÎñ¶¼»á¶ÁÂó¿Ë·ç£¬
+ * I2S Í¨µÀÓëÄÚ²¿¾²Ì¬»º³å²»Ö§³Ö²¢·¢·ÃÎÊ£¬ÕâÀï´®ĞĞ»¯¡£
+ * Â¼Òô¿ªÊ¼Ë²¼ä UDP ÈÎÎñ¿ÉÄÜÕı×èÈûÔÚ¶Á¿¨£¨×î³¤Ò»¸ö»º³å 20ms£©£¬Â¼ÒôÉÔµÈ¼´¿É¡£
+ */
+static SemaphoreHandle_t s_mic_lock = NULL;
+
+static esp_err_t mic_read_inner(int16_t *out, size_t max_samples, size_t *out_samples);
 
 static esp_err_t mic_read(int16_t *out, size_t max_samples, size_t *out_samples)
+{
+    if (s_mic_lock == NULL) {
+        s_mic_lock = xSemaphoreCreateMutex();
+    }
+    xSemaphoreTake(s_mic_lock, portMAX_DELAY);
+    esp_err_t ret = mic_read_inner(out, max_samples, out_samples);
+    xSemaphoreGive(s_mic_lock);
+    return ret;
+}
+
+static esp_err_t mic_read_inner(int16_t *out, size_t max_samples, size_t *out_samples)
 {
     *out_samples = 0;
 
 #if MIC_TYPE == MIC_I2S_STD
-    static uint32_t raw[RECORD_BUF_SAMPLES * 2];       // ç«‹ä½“å£°å¸§ï¼šå·¦ + å³
+    static uint32_t raw[RECORD_BUF_SAMPLES * 2];       // Á¢ÌåÉùÖ¡£º×ó + ÓÒ
     size_t bytes_read = 0;
     esp_err_t ret = i2s_channel_read(s_rx_chan, raw, sizeof(raw), &bytes_read, pdMS_TO_TICKS(500));
     if (ret != ESP_OK) {
@@ -424,7 +501,7 @@ static esp_err_t mic_read(int16_t *out, size_t max_samples, size_t *out_samples)
         frames = max_samples;
     }
     for (size_t i = 0; i < frames; i++) {
-        int32_t s24 = ((int32_t)raw[i * 2]) >> 8;      // å·¦å£°é“ = éº¦å…‹é£ï¼ˆINMP441 L/R æ¥åœ°ï¼‰
+        int32_t s24 = ((int32_t)raw[i * 2]) >> 8;      // ×óÉùµÀ = Âó¿Ë·ç£¨INMP441 L/R ½ÓµØ£©
         int32_t amp = s24 * MIC_DIGITAL_GAIN;
         if (amp > 32767) {
             amp = 32767;
@@ -477,38 +554,38 @@ static esp_err_t mic_read(int16_t *out, size_t max_samples, size_t *out_samples)
 #endif
 }
 
-/* ---------------------------- æŒ‰é”® ---------------------------- */
+/* ---------------------------- °´¼ü ---------------------------- */
 
-/* ç©ºé—²æ—¶çš„ç­‰å¾…ï¼šé˜»å¡ç›´åˆ°ç”¨æˆ·å®Œæˆä¸€æ¬¡ã€ŒæŒ‰ä¸‹ â†’ æ¾å¼€ã€ï¼Œå…¨ç¨‹æ¶ˆæŠ– */
+/* ¿ÕÏĞÊ±µÄµÈ´ı£º×èÈûÖ±µ½ÓÃ»§Íê³ÉÒ»´Î¡¸°´ÏÂ ¡ú ËÉ¿ª¡¹£¬È«³ÌÏû¶¶ */
 static void key_wait_click(void)
 {
     while (1) {
-        while (gpio_get_level(KEY_GPIO) != 0) {     // ç­‰æŒ‰ä¸‹
+        while (gpio_get_level(KEY_GPIO) != 0) {     // µÈ°´ÏÂ
             vTaskDelay(pdMS_TO_TICKS(20));
         }
-        vTaskDelay(pdMS_TO_TICKS(50));              // æŒ‰ä¸‹æ¶ˆæŠ–
+        vTaskDelay(pdMS_TO_TICKS(50));              // °´ÏÂÏû¶¶
         if (gpio_get_level(KEY_GPIO) != 0) {
-            continue;                              // åªæ˜¯æŠ–åŠ¨ï¼Œå¿½ç•¥
+            continue;                              // Ö»ÊÇ¶¶¶¯£¬ºöÂÔ
         }
-        while (gpio_get_level(KEY_GPIO) == 0) {     // ç­‰æ¾å¼€
+        while (gpio_get_level(KEY_GPIO) == 0) {     // µÈËÉ¿ª
             vTaskDelay(pdMS_TO_TICKS(20));
         }
-        vTaskDelay(pdMS_TO_TICKS(50));              // æ¾å¼€æ¶ˆæŠ–
+        vTaskDelay(pdMS_TO_TICKS(50));              // ËÉ¿ªÏû¶¶
         return;
     }
 }
 
-/* å½•éŸ³è¿‡ç¨‹ä¸­çš„æ£€æŸ¥ï¼šæŒ‰ä¸‹å°±è¿”å› trueï¼ˆä¸å¤ä½ã€ä¸ç­‰æ¾å¼€ï¼Œç”±è°ƒç”¨è€…å¤„ç†ï¼‰ */
+/* Â¼Òô¹ı³ÌÖĞµÄ¼ì²é£º°´ÏÂ¾Í·µ»Ø true£¨²»¸´Î»¡¢²»µÈËÉ¿ª£¬ÓÉµ÷ÓÃÕß´¦Àí£© */
 static bool key_pressed_now(void)
 {
     if (gpio_get_level(KEY_GPIO) != 0) {
         return false;
     }
-    vTaskDelay(pdMS_TO_TICKS(30));                  // å¤æ£€æ¶ˆæŠ–
+    vTaskDelay(pdMS_TO_TICKS(30));                  // ¸´¼ìÏû¶¶
     return gpio_get_level(KEY_GPIO) == 0;
 }
 
-/* ç­‰ç”¨æˆ·æŠŠæ‰‹æŒ‡æŠ¬èµ·æ¥ï¼Œé¿å…æ¾æ‰‹ç¬é—´è¢«å½“æˆä¸‹ä¸€æ¬¡ã€Œå¼€å§‹ã€ */
+/* µÈÓÃ»§°ÑÊÖÖ¸Ì§ÆğÀ´£¬±ÜÃâËÉÊÖË²¼ä±»µ±³ÉÏÂÒ»´Î¡¸¿ªÊ¼¡¹ */
 static void key_wait_release(void)
 {
     while (gpio_get_level(KEY_GPIO) == 0) {
@@ -517,9 +594,9 @@ static void key_wait_release(void)
     vTaskDelay(pdMS_TO_TICKS(50));
 }
 
-/* ---------------------------- å½•éŸ³å†™æ–‡ä»¶ ---------------------------- */
+/* ---------------------------- Â¼ÒôĞ´ÎÄ¼ş ---------------------------- */
 
-/* æ‰«æ /sdcard é‡Œæ‰€æœ‰ recNNN.wavï¼ŒæŒ‘ä¸€ä¸ªä¸ä¼šè¦†ç›–å·²æœ‰å½•éŸ³çš„æ–‡ä»¶å */
+/* É¨Ãè /sdcard ÀïËùÓĞ recNNN.wav£¬ÌôÒ»¸ö²»»á¸²¸ÇÒÑÓĞÂ¼ÒôµÄÎÄ¼şÃû */
 static void next_record_path(char *out, size_t out_len)
 {
     int next = 0;
@@ -529,7 +606,7 @@ static void next_record_path(char *out, size_t out_len)
         struct dirent *ent;
         while ((ent = readdir(dir)) != NULL) {
             int idx = -1;
-            /* åªè®¤ rec<æ•°å­—>.wavï¼Œä¸Šé™ 8 ä½é˜²æ­¢ sscanf æº¢å‡º int */
+            /* Ö»ÈÏ rec<Êı×Ö>.wav£¬ÉÏÏŞ 8 Î»·ÀÖ¹ sscanf Òç³ö int */
             if (sscanf(ent->d_name, "rec%8d.wav", &idx) == 1 && idx >= next) {
                 next = idx + 1;
             }
@@ -537,11 +614,11 @@ static void next_record_path(char *out, size_t out_len)
         closedir(dir);
     }
 
-    /* å†é€ä¸ª stat ç¡®è®¤ï¼šFTP ä¸Šä¼  / æ‰‹å·¥æ‹·è¿›æ¥çš„åŒåæ–‡ä»¶ä¹Ÿç®—å ç”¨ */
+    /* ÔÙÖğ¸ö stat È·ÈÏ£ºFTP ÉÏ´« / ÊÖ¹¤¿½½øÀ´µÄÍ¬ÃûÎÄ¼şÒ²ËãÕ¼ÓÃ */
     while (1) {
         snprintf(out, out_len, SD_MOUNT_POINT "/rec%03d.wav", next);
         struct stat st;
-        if (stat(out, &st) != 0) {                  // æ–‡ä»¶ä¸å­˜åœ¨ -> å¯ä»¥ç”¨
+        if (stat(out, &st) != 0) {                  // ÎÄ¼ş²»´æÔÚ -> ¿ÉÒÔÓÃ
             break;
         }
         next++;
@@ -549,9 +626,9 @@ static void next_record_path(char *out, size_t out_len)
 }
 
 /*
- * å›å¡« WAV å¤´ï¼šæŠŠ"å·²å†™å…¥çš„æ•°æ®å­—èŠ‚æ•°"å†™è¿›æ–‡ä»¶å¤´ï¼Œå¹¶æŠŠç¼“å†²çœŸæ­£åˆ·åˆ°å¡ä¸Šã€‚
- * åšå®Œè¿™ä¸€æ­¥ï¼Œç£ç›˜ä¸Šçš„æ–‡ä»¶æ­¤åˆ»å°±æ˜¯ä¸€ä¸ªå®Œæ•´å¯æ’­æ”¾çš„ WAVã€‚
- * å†™å®Œå¤´ä¼šé‡æ–°å®šä½åˆ°æ•°æ®æœ«å°¾ï¼Œæ–¹ä¾¿ç»§ç»­è¿½åŠ å½•éŸ³æ•°æ®ã€‚
+ * »ØÌî WAV Í·£º°Ñ"ÒÑĞ´ÈëµÄÊı¾İ×Ö½ÚÊı"Ğ´½øÎÄ¼şÍ·£¬²¢°Ñ»º³åÕæÕıË¢µ½¿¨ÉÏ¡£
+ * ×öÍêÕâÒ»²½£¬´ÅÅÌÉÏµÄÎÄ¼ş´Ë¿Ì¾ÍÊÇÒ»¸öÍêÕû¿É²¥·ÅµÄ WAV¡£
+ * Ğ´ÍêÍ·»áÖØĞÂ¶¨Î»µ½Êı¾İÄ©Î²£¬·½±ã¼ÌĞø×·¼ÓÂ¼ÒôÊı¾İ¡£
  */
 static bool wav_header_flush(FILE *f, uint32_t data_bytes)
 {
@@ -566,26 +643,165 @@ static bool wav_header_flush(FILE *f, uint32_t data_bytes)
     if (fflush(f) != 0) {
         return false;
     }
-    /* å›åˆ°æ•°æ®æœ«å°¾ï¼Œç»§ç»­å¾€ä¸‹è¿½åŠ  */
+    /* »Øµ½Êı¾İÄ©Î²£¬¼ÌĞøÍùÏÂ×·¼Ó */
     if (fseek(f, (long)(WAV_HEADER_BYTES + data_bytes), SEEK_SET) != 0) {
         return false;
     }
     return true;
 }
 
+/* GPIO33 ¶Ì°´»Øµ÷£ºÇëÇóÔİÍ£/¼ÌĞøÂ¼Òô£¨wifi_cfg °´¼üÈÎÎñÉÏÏÂÎÄµ÷ÓÃ£¬Ö»ÖÃ±êÖ¾£© */
+static void record_toggle_pause(void)
+{
+    s_rec_pause_req = true;
+}
+
+/*
+ * È¥Ã«´Ì£¨de-click£©£ºPCB ÉÏ I2S Î»´íÎó±íÏÖÎª¹ÂÁ¢Âú·ù¼â·å / Ìù¹ì¶Î¡£
+ *   1) ¹ÂÁ¢¼â·å£ºÄ³Ñù±¾ÓëÇ°ºóÑù±¾¶¼Ïà²î¾Ş´ó ¡ú ÓÃÇ°ºó¾ùÖµÌæ»»
+ *   2) Ìù¹ì¶Î£ºÁ¬Ğø >=4 ¸öÑù±¾ÌùÔÚ ¡À32700 ¸½½ü ¡ú ÓÃÁ½¶ËÏßĞÔ²åÖµÌæ»»
+ * Ö»¶Ô¸¶¹ÂÁ¢µÄ»µµã£¬Õı³£ÓïÒô²¨ĞÎ¼¸ºõ²»ÊÜÓ°Ïì¡£
+ * ×¢Òâ£ºÕâÊÇÈí¼ş²¹¾È£¬ÖÎ±¾»¹ÊÇÒªĞŞÓ²¼ş£¨²é SCK/WS/SD ×ßÏßÓë L/R ½ÓµØ£©¡£
+ */
+static void mic_declick(int16_t *s, size_t n)
+{
+    const int T = 24000;                       // ¼â·åÅĞ¶¨ãĞÖµ
+    for (size_t i = 1; i + 1 < n; i++) {
+        int a = s[i - 1], b = s[i], c = s[i + 1];
+        if (abs(b - a) > T && abs(b - c) > T) {
+            s[i] = (int16_t)((a + c) >> 1);
+        }
+    }
+    size_t i = 0;
+    while (i < n) {
+        if (s[i] >= 32700 || s[i] <= -32700) {
+            size_t j = i;
+            while (j < n && (s[j] >= 32700 || s[j] <= -32700)) {
+                j++;
+            }
+            if (j - i >= 4) {                  // Á¬ĞøÌù¹ì£ºÅĞ¶¨ÎªÃ«´Ì¶Î
+                int lo = (i > 0) ? s[i - 1] : 0;
+                int hi = (j < n) ? s[j] : lo;
+                for (size_t k = i; k < j; k++) {
+                    s[k] = (int16_t)(lo + (int32_t)(hi - lo) * (int32_t)(k - i + 1) / (int32_t)(j - i + 1));
+                }
+            }
+            i = j;
+        } else {
+            i++;
+        }
+    }
+}
+
+/* ==================== UDP ÊµÊ±´«Éù£¨¼àÌı / ĞéÄâÂó¿Ë·ç£© ====================
+ * °ÑÂó¿Ë·ç PCM£¨16kHz/16bit/µ¥ÉùµÀ£©ÓÃ UDP ¹ã²¥·¢µ½¾ÖÓòÍø¡£
+ * µçÄÔ¶ËÔËĞĞ udp_mic_receiver.py£¨Python + PyAudio£©½ÓÊÕ£º
+ *   - Ö±½Ó¼àÌı£¬»òĞ´Èë VB-Cable ĞéÄâÉù¿¨µ±×÷ÏµÍ³"Âó¿Ë·ç"£¨Î¢ĞÅ/ÌÚÑ¶»áÒé¿ÉÑ¡Ëü£©
+ * - Ã¿°ü 20ms = 320 Ñù±¾ = 640 ×Ö½Ú£¬¶Ëµ½¶ËÑÓ³ÙÔ¼ 50~150ms
+ * - ÓëÂ¼Òô»¥³â£ºÂ¼Òô½øĞĞÖĞ±¾ÈÎÎñÔİÍ£¶ÁÂó¿Ë·ç£¨Â¼ÒôÓÅÏÈ£¬²»ÇÀ I2S£©
+ */
+#define ENABLE_UDP_STREAM    1        // ÖÃ 0 ¿ÉÕûÌå¹Ø±Õ UDP ´«Éù
+#define UDP_STREAM_PORT      9000     // µçÄÔ¶Ë¼àÌıµÄ UDP ¶Ë¿Ú
+#define UDP_SAMPLES_PER_PKT  320      // Ã¿°üÑù±¾Êı£¨20ms @ 16kHz£©
+
+static void udp_stream_task(void *arg)
+{
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "UDP socket ´´½¨Ê§°Ü");
+        vTaskDelete(NULL);
+        return;
+    }
+    int broadcast = 1;
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+
+    /* °ó¶¨¶Ë¿Ú£º½ÓÊÕµçÄÔ¶ËµÄ"¶©ÔÄ"°ü¡£WiFi ¹ã²¥¶ª°üÂÊ¸ß´ï 30~70%£¬
+       ÊÕµ½¶©ÔÄºó¸ÄÓÃµ¥²¥£¨ÓĞÖØ´«£©£¬¶ª°ü½Ó½ü 0 */
+    struct sockaddr_in local = {
+        .sin_family = AF_INET,
+        .sin_port   = htons(UDP_STREAM_PORT),
+        .sin_addr.s_addr = INADDR_ANY,
+    };
+    bind(sock, (struct sockaddr *)&local, sizeof(local));
+
+    struct sockaddr_in dest = {
+        .sin_family = AF_INET,
+        .sin_port   = htons(UDP_STREAM_PORT),
+        .sin_addr.s_addr = 0,
+    };
+    struct sockaddr_in peer  = { 0 };   /* ÒÑ¶©ÔÄµÄµçÄÔµØÖ· */
+    bool have_peer = false;
+    uint8_t sub[8];
+    socklen_t peer_len;
+
+    static int16_t buf[UDP_SAMPLES_PER_PKT];
+    ESP_LOGI(TAG, "UDP ÊµÊ±´«ÉùÒÑÆô¶¯£¨Ä¿±ê¶Ë¿Ú %d£¬20ms/°ü£©", UDP_STREAM_PORT);
+
+    while (1) {
+        /* µÈ WiFi ÄÃµ½ IP£¬ÔÙËã±¾Íø¶ÎµÄ¹ã²¥µØÖ· */
+        if (dest.sin_addr.s_addr == 0) {
+            esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            esp_netif_ip_info_t ip;
+            if (netif != NULL && esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0) {
+                dest.sin_addr.s_addr = ip.ip.addr | ~(ip.netmask.addr);
+                uint32_t bc = ntohl(dest.sin_addr.s_addr);
+                ESP_LOGI(TAG, "UDP ·¢ËÍÄ¿±ê(¹ã²¥): %u.%u.%u.%u:%d",
+                         (unsigned)((bc >> 24) & 0xFF), (unsigned)((bc >> 16) & 0xFF),
+                         (unsigned)((bc >> 8) & 0xFF), (unsigned)(bc & 0xFF),
+                         UDP_STREAM_PORT);
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(500));
+                continue;
+            }
+        }
+
+        /* ´æ´¢²»¿ÉÓÃ»òÕıÔÚÂ¼Òô£ºÈÃÂ·£¬²»ÇÀ I2S */
+        if (!s_storage_ok || s_recording_active) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
+        /* ·Ç×èÈû¼ì²é¶©ÔÄ°ü£ºµçÄÔ¶Ë udp_mic_receiver.py Ã¿ 5 Ãë·¢Ò»´Î "SUB" */
+        peer_len = sizeof(peer);
+        if (recvfrom(sock, sub, sizeof(sub), MSG_DONTWAIT,
+                     (struct sockaddr *)&peer, &peer_len) > 0) {
+            uint32_t pc = ntohl(peer.sin_addr.s_addr);
+            ESP_LOGI(TAG, "µçÄÔ¶ËÒÑ¶©ÔÄ£¬ÇĞ»»µ¥²¥: %u.%u.%u.%u:%d",
+                     (unsigned)((pc >> 24) & 0xFF), (unsigned)((pc >> 16) & 0xFF),
+                     (unsigned)((pc >> 8) & 0xFF), (unsigned)(pc & 0xFF),
+                     (int)ntohs(peer.sin_port));
+            have_peer = true;
+        }
+
+        size_t n = 0;
+        if (mic_read(buf, UDP_SAMPLES_PER_PKT, &n) != ESP_OK || n == 0) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
+        if (have_peer) {
+            sendto(sock, buf, n * sizeof(int16_t), 0,
+                   (struct sockaddr *)&peer, sizeof(peer));
+        } else {
+            sendto(sock, buf, n * sizeof(int16_t), 0,
+                   (struct sockaddr *)&dest, sizeof(dest));
+        }
+    }
+}
+
 static bool record_to_file(const char *path)
 {
-    static int16_t samples[RECORD_BUF_SAMPLES];   // staticï¼šé¿å…å ç”¨ä»»åŠ¡æ ˆ
+    static int16_t samples[RECORD_BUF_SAMPLES];   // static£º±ÜÃâÕ¼ÓÃÈÎÎñÕ»
+    s_rec_pause_req = false;                      // ÇåµôÉÏÒ»´ÎÂ¼Òô²ĞÁôµÄÔİÍ£ÇëÇó
 
     FILE *f = fopen(path, "wb");
     if (f == NULL) {
-        ESP_LOGE(TAG, "æ— æ³•åˆ›å»ºæ–‡ä»¶ %s", path);
+        ESP_LOGE(TAG, "ÎŞ·¨´´½¨ÎÄ¼ş %s", path);
         return false;
     }
 
-    /* å…ˆå†™ä¸€ä¸ªç©ºå¤´å ä½ï¼šå½•éŸ³æ—¶é•¿æœªçŸ¥ï¼Œæ•°æ®é•¿åº¦ç”± wav_header_flush() å‘¨æœŸæ€§å›å¡« */
+    /* ÏÈĞ´Ò»¸ö¿ÕÍ·Õ¼Î»£ºÂ¼ÒôÊ±³¤Î´Öª£¬Êı¾İ³¤¶ÈÓÉ wav_header_flush() ÖÜÆÚĞÔ»ØÌî */
     if (!wav_header_flush(f, 0)) {
-        ESP_LOGE(TAG, "å†™ WAV å¤´å¤±è´¥ï¼Œå­˜å‚¨ä¸å¯ç”¨");
+        ESP_LOGE(TAG, "Ğ´ WAV Í·Ê§°Ü£¬´æ´¢²»¿ÉÓÃ");
         fclose(f);
         return false;
     }
@@ -597,23 +813,62 @@ static bool record_to_file(const char *path)
                          : 0xFFFFFFFF;
     TickType_t t_start = xTaskGetTickCount();
     uint32_t last_report = 0;
+    bool paused = false;
 
     while (1) {
-        if (written >= limit_bytes) {
-            ESP_LOGW(TAG, "å·²å½•æ»¡ %d ç§’ï¼ˆRECORD_MAX_SECONDSï¼‰ï¼Œè‡ªåŠ¨åœæ­¢", RECORD_MAX_SECONDS);
+        /* °Î¿¨¼ì²â£ºGPIO34 ±ä¸ßÁ¢¼´Í£Ö¹¡£×îºó 5 ÃëÍ¬²½µãÖ®Ç°µÄÊı¾İ
+           ÒÑÊÇÍêÕû WAV£¬Ö»ÓĞÍ¬²½µãÖ®ºóµÄÒ»Ğ¡¶ÎÀ´²»¼°Ğ´¿¨ */
+        if (!sd_card_inserted()) {
+            ESP_LOGE(TAG, "¼ì²âµ½ SD ¿¨±»°Î³ö£¡Êı¾İÒÑ±£»¤µ½×îºóÍ¬²½µã£¬Á¢¼´Í£Ö¹Â¼Òô");
+            ok = false;
             break;
+        }
+
+        if (written >= limit_bytes) {
+            ESP_LOGW(TAG, "ÒÑÂ¼Âú %d Ãë£¨RECORD_MAX_SECONDS£©£¬×Ô¶¯Í£Ö¹", RECORD_MAX_SECONDS);
+            break;
+        }
+
+        /* GPIO33 ¶Ì°´£ºÔİÍ£ / ¼ÌĞøÇĞ»» */
+        if (s_rec_pause_req) {
+            s_rec_pause_req = false;
+            paused = !paused;
+            oled_set_state(paused ? OLED_ST_PAUSE : OLED_ST_REC);
+            s_led_mode = paused ? LED_MODE_SLOW : LED_MODE_BLINK;
+            if (paused) {
+                /* ÔİÍ£Ë²¼äÍ¬²½Ò»´Î£ºÒÑÂ¼²¿·ÖÁ¢¿ÌÊÇ°²È«ÍêÕûµÄ WAV */
+                wav_header_flush(f, written);
+                ESP_LOGI(TAG, "ÒÑÔİÍ££¨GPIO33 ¶Ì°´¼ÌĞø£¬BOOT ¼üÍ£Ö¹±£´æ£©");
+            } else {
+                ESP_LOGI(TAG, "¼ÌĞøÂ¼Òô");
+            }
+        }
+
+        /* BOOT ¼ü°´ÏÂ£ºÍ£Ö¹Â¼Òô²¢±£´æ£¨ÔİÍ£ÖĞÍ¬ÑùÓĞĞ§£© */
+        if (key_pressed_now()) {
+            ESP_LOGI(TAG, "¼ì²âµ½°´¼ü£¬Í£Ö¹Â¼Òô£¬ÕıÔÚ±£´æ...");
+            key_wait_release();
+            break;
+        }
+
+        /* ÔİÍ£ÖĞ£º³ÖĞø¶ÁÂó¿Ë·çµ«¶ªÆúÊı¾İ£¨±£³Ö I2S DMA Á÷¶¯£©£¬²»Ğ´¿¨²»¼ÆÊ± */
+        if (paused) {
+            size_t drop = 0;
+            mic_read(samples, RECORD_BUF_SAMPLES, &drop);
+            continue;
         }
 
         size_t n = 0;
         if (mic_read(samples, RECORD_BUF_SAMPLES, &n) != ESP_OK || n == 0) {
             continue;
         }
+        mic_declick(samples, n);               // ĞŞµô I2S Î»´íÎóÃ«´Ì
         uint32_t nb = n * sizeof(int16_t);
         if (written + nb > limit_bytes) {
             nb = limit_bytes - written;
         }
         if (fwrite(samples, 1, nb, f) != nb) {
-            ESP_LOGE(TAG, "å†™å¡å¤±è´¥ï¼ˆå¡æ»¡æˆ–å¡è¢«æ‹”å‡ºï¼Ÿï¼‰ï¼Œæœ¬æ®µæå‰ç»“æŸ");
+            ESP_LOGE(TAG, "Ğ´¿¨Ê§°Ü£¨¿¨Âú»ò¿¨±»°Î³ö£¿£©£¬±¾¶ÎÌáÇ°½áÊø");
             ok = false;
             break;
         }
@@ -622,34 +877,28 @@ static bool record_to_file(const char *path)
         uint32_t sec_done = written / (SAMPLE_RATE * sizeof(int16_t));
         if (sec_done != last_report) {
             last_report = sec_done;
-            oled_set_seconds(sec_done);
+            /* ²»ÔÙÃ¿Ãëµ÷ oled_set_seconds()£ºÂ¼ÒôÖĞÆÁÄ»¶³½áÏÔÊ¾ ST:REC£¬
+               Õû¸öÂ¼Òô¹ı³ÌÖ»ÔÚ¿ªÊ¼/Í£Ö¹Ê±¸÷Ë¢Ò»´ÎÆÁ£¬°Ñ I2C ´®ÈÅ½µµ½×îµÍ */
 
-            /* ä¿æŠ¤æªæ–½ï¼šæ¯ RECORD_SYNC_SECONDS ç§’æŠŠæ•°æ®çœŸæ­£åˆ·è¿›å¡å¹¶å›å¡«æ–‡ä»¶å¤´ï¼Œ
-               è¿™æ ·å°±ç®—å½•éŸ³é€”ä¸­æ–­ç”µ / æ‹”å¡ / å¤ä½ï¼Œå·²ç»å½•è¿›å»çš„éƒ¨åˆ†ä¾ç„¶æ˜¯ä¸€ä¸ª
-               èƒ½æ­£å¸¸æ’­æ”¾çš„å®Œæ•´ WAVï¼Œè€Œä¸ä¼šç•™ä¸‹ 0 å­—èŠ‚æˆ–é•¿åº¦å¯¹ä¸ä¸Šçš„åæ–‡ä»¶ */
+            /* ±£»¤´ëÊ©£ºÃ¿ RECORD_SYNC_SECONDS Ãë°ÑÊı¾İÕæÕıË¢½ø¿¨²¢»ØÌîÎÄ¼şÍ·£¬
+               ÕâÑù¾ÍËãÂ¼ÒôÍ¾ÖĞ¶Ïµç / °Î¿¨ / ¸´Î»£¬ÒÑ¾­Â¼½øÈ¥µÄ²¿·ÖÒÀÈ»ÊÇÒ»¸ö
+               ÄÜÕı³£²¥·ÅµÄÍêÕû WAV£¬¶ø²»»áÁôÏÂ 0 ×Ö½Ú»ò³¤¶È¶Ô²»ÉÏµÄ»µÎÄ¼ş */
             if (sec_done % RECORD_SYNC_SECONDS == 0) {
                 if (!wav_header_flush(f, written)) {
-                    ESP_LOGE(TAG, "åŒæ­¥åˆ°å¡å¤±è´¥ï¼ˆå¡è¢«æ‹”å‡ºæˆ–å†™æ»¡ï¼Ÿï¼‰");
+                    ESP_LOGE(TAG, "Í¬²½µ½¿¨Ê§°Ü£¨¿¨±»°Î³ö»òĞ´Âú£¿£©");
                     ok = false;
                     break;
                 }
-                ESP_LOGI(TAG, "å·²å½• %lu ç§’ï¼Œå·²å®‰å…¨å†™å…¥å¡ï¼ˆæ­¤åˆ»æ–­ç”µä¹Ÿä¸ä¼šæŸåæ–‡ä»¶ï¼‰",
+                ESP_LOGI(TAG, "ÒÑÂ¼ %lu Ãë£¬ÒÑ°²È«Ğ´Èë¿¨£¨´Ë¿Ì¶ÏµçÒ²²»»áËğ»µÎÄ¼ş£©",
                          (unsigned long)sec_done);
             } else {
-                ESP_LOGI(TAG, "å·²å½• %lu ç§’ï¼ˆå†æŒ‰ä¸€æ¬¡ BOOT é”®åœæ­¢ï¼‰", (unsigned long)sec_done);
+                ESP_LOGI(TAG, "ÒÑÂ¼ %lu Ãë£¨ÔÙ°´Ò»´Î BOOT ¼üÍ£Ö¹£©", (unsigned long)sec_done);
             }
-        }
-
-        /* BOOT é”®æŒ‰ä¸‹ï¼šåœæ­¢å½•éŸ³å¹¶ä¿å­˜ */
-        if (key_pressed_now()) {
-            ESP_LOGI(TAG, "æ£€æµ‹åˆ°æŒ‰é”®ï¼Œåœæ­¢å½•éŸ³ï¼Œæ­£åœ¨ä¿å­˜...");
-            key_wait_release();
-            break;
         }
     }
 
-    /* æ”¶å°¾ï¼šä¸ç®¡æ˜¯æ­£å¸¸åœæ­¢ã€å½•æ»¡ä¸Šé™è¿˜æ˜¯å‡ºé”™é€€å‡ºï¼Œéƒ½å›å¡«çœŸå®é•¿åº¦å¹¶å…³é—­æ–‡ä»¶ï¼Œ
-       ä¿è¯è½åˆ°å¡ä¸Šçš„æ–‡ä»¶æ°¸è¿œæ˜¯å¯æ’­æ”¾çš„å®Œæ•´ WAV */
+    /* ÊÕÎ²£º²»¹ÜÊÇÕı³£Í£Ö¹¡¢Â¼ÂúÉÏÏŞ»¹ÊÇ³ö´íÍË³ö£¬¶¼»ØÌîÕæÊµ³¤¶È²¢¹Ø±ÕÎÄ¼ş£¬
+       ±£Ö¤Âäµ½¿¨ÉÏµÄÎÄ¼şÓÀÔ¶ÊÇ¿É²¥·ÅµÄÍêÕû WAV */
     if (!wav_header_flush(f, written)) {
         ok = false;
     }
@@ -661,69 +910,88 @@ static bool record_to_file(const char *path)
         ok = false;
     }
 
-    ESP_LOGI(TAG, "å®Œæˆ: %s (%lu å­—èŠ‚, æ—¶é•¿ %lu ç§’, è€—æ—¶ %lu ms)%s",
+    ESP_LOGI(TAG, "Íê³É: %s (%lu ×Ö½Ú, Ê±³¤ %lu Ãë, ºÄÊ± %lu ms)%s",
              path, (unsigned long)(written + WAV_HEADER_BYTES),
              (unsigned long)(written / (SAMPLE_RATE * sizeof(int16_t))),
              (unsigned long)((xTaskGetTickCount() - t_start) * portTICK_PERIOD_MS),
-             ok ? "" : "  <-- å†™å…¥è¿‡ç¨‹ä¸­å‡ºè¿‡é”™ï¼Œæ–‡ä»¶å¯èƒ½ä¸å®Œæ•´");
+             ok ? "" : "  <-- Ğ´Èë¹ı³ÌÖĞ³ö¹ı´í£¬ÎÄ¼ş¿ÉÄÜ²»ÍêÕû");
     return ok;
 }
 
-/* ---------------------------- ä¸»æµç¨‹ ---------------------------- */
+/* ---------------------------- Ö÷Á÷³Ì ---------------------------- */
 
 static void record_task(void *arg)
 {
     char path[64];
 
     while (1) {
-        /* å­˜å‚¨ä¸å¯ç”¨ï¼ˆSD å¡/éº¦å…‹é£æœ‰é—®é¢˜ï¼‰ï¼šLED ç†„ç­ï¼ŒæŒ‰é”®å®Œå…¨æ²¡ååº” */
+        /* ´æ´¢²»¿ÉÓÃ£¨SD ¿¨/Âó¿Ë·çÓĞÎÊÌâ£©£ºLED Ï¨Ãğ£¬°´¼üÍêÈ«Ã»·´Ó¦ */
         if (!s_storage_ok) {
             s_led_mode = LED_MODE_OFF;
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
 
-        /* ç©ºé—²å¾…æœºï¼šLED å¸¸äº® = å¯ä»¥å¼€å§‹å½• */
+        /* ¿ÕÏĞ´ı»ú£ºLED ³£ÁÁ = ¿ÉÒÔ¿ªÊ¼Â¼ */
         s_led_mode = LED_MODE_ON;
-        ESP_LOGI(TAG, "ç©ºé—²ä¸­ï¼šæŒ‰ä¸€ä¸‹ BOOT é”®(GPIO0)å¼€å§‹å½•éŸ³");
+        ESP_LOGI(TAG, "¿ÕÏĞÖĞ£º°´Ò»ÏÂ BOOT ¼ü(GPIO0)¿ªÊ¼Â¼Òô");
         key_wait_click();
 
-        /* å…ˆæ‰¾ä¸€ä¸ªä¸ä¼šè¢«è¦†ç›–çš„æ–‡ä»¶åï¼Œå†å¼€å½• */
+        /* ÏÈÕÒÒ»¸ö²»»á±»¸²¸ÇµÄÎÄ¼şÃû£¬ÔÙ¿ªÂ¼ */
         next_record_path(path, sizeof(path));
-        ESP_LOGI(TAG, "===== å¼€å§‹å½•éŸ³: %sï¼ˆå†æŒ‰ä¸€æ¬¡ BOOT é”®åœæ­¢ï¼‰=====", path);
+        ESP_LOGI(TAG, "===== ¿ªÊ¼Â¼Òô: %s£¨ÔÙ°´Ò»´Î BOOT ¼üÍ£Ö¹£©=====", path);
         oled_set_file(path);
         oled_set_state(OLED_ST_REC);
 
-        s_led_mode = LED_MODE_BLINK;               // å½•éŸ³ä¸­ï¼šLED é—ªçƒ
+        s_led_mode = LED_MODE_BLINK;               // Â¼ÒôÖĞ£ºLED ÉÁË¸
+        s_recording_active = true;                 // UDP ´«ÉùÈÎÎñÈÃÂ·
         bool ok = record_to_file(path);
+        s_recording_active = false;
 
         if (!ok) {
-            /* å†™å¡å‡ºé”™ï¼ˆå¡æ»¡ / è¢«æ‹”å‡º / æŸåï¼‰ï¼šä¸å†å‡è£…èƒ½å½•ï¼ŒLED ç†„ç­å¹¶åœç”¨æŒ‰é”® */
-            ESP_LOGE(TAG, "å­˜å‚¨å¼‚å¸¸ï¼Œå·²åœæ­¢å½•éŸ³åŠŸèƒ½ï¼ˆLED ç†„ç­ï¼ŒæŒ‰é”®æ— æ•ˆï¼‰");
+            /* Ğ´¿¨³ö´í£¨¿¨Âú / ±»°Î³ö / Ëğ»µ£©£ºÍ£ÓÃ°´¼ü£¬µÈÖØĞÂ²å¿¨ºó×Ô¶¯»Ö¸´ */
+            ESP_LOGE(TAG, "´æ´¢Òì³££¬µÈ´ıÖØĞÂ²åÈë SD ¿¨...");
             s_storage_ok = false;
             s_led_mode = LED_MODE_OFF;
+            oled_set_sd_ok(false);
             oled_set_state(OLED_ST_ERROR);
+
+            /* ×èÈûµÈ´ıÖØĞÂ²å¿¨£¬È»ºóÖØĞÂ¹ÒÔØ»Ö¸´ */
+            while (!sd_card_inserted_stable()) {
+                vTaskDelay(pdMS_TO_TICKS(300));
+            }
+            ESP_LOGI(TAG, "¼ì²âµ½ SD ¿¨ÖØĞÂ²åÈë£¬ÖØĞÂ¹ÒÔØ...");
+            if (mount_sdcard() == ESP_OK) {
+                s_storage_ok = true;
+                oled_set_sd_ok(true);
+                oled_set_state(OLED_ST_READY);
+                ESP_LOGI(TAG, "SD ¿¨ÖØĞÂ¹ÒÔØ³É¹¦£¬Â¼Òô¹¦ÄÜÒÑ»Ö¸´");
+            } else {
+                ESP_LOGE(TAG, "ÖØĞÂ¹ÒÔØÊ§°Ü£¬Çë°Î³öºóÖØ²å");
+            }
             continue;
         }
 
-        s_led_mode = LED_MODE_ON;                  // å½•å®Œå›åˆ°å¸¸äº®ï¼Œç­‰ä¸‹ä¸€æ¬¡æŒ‰é”®
+        s_led_mode = LED_MODE_ON;                  // Â¼Íê»Øµ½³£ÁÁ£¬µÈÏÂÒ»´Î°´¼ü
         oled_set_state(OLED_ST_READY);
-        vTaskDelay(pdMS_TO_TICKS(300));            // å–˜å£æ°”ï¼Œè®© WiFi / FTP æœ‰æœºä¼šå¹²æ´»
+        vTaskDelay(pdMS_TO_TICKS(300));            // ´­¿ÚÆø£¬ÈÃ WiFi / FTP ÓĞ»ú»á¸É»î
     }
 }
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "ESP32 å½•éŸ³åˆ° SD å¡  |  é‡‡æ ·ç‡ %d Hz, 16bit å•å£°é“", SAMPLE_RATE);
+    ESP_LOGI(TAG, "ESP32 Â¼Òôµ½ SD ¿¨  |  ²ÉÑùÂÊ %d Hz, 16bit µ¥ÉùµÀ", SAMPLE_RATE);
 
-    /* OLED å°½æ—©ä¸Šç”µæ˜¾ç¤ºï¼ˆæ‰¾ä¸åˆ°å±åªä¼šæ‰“æ—¥å¿—ï¼Œä¸å½±å“ä¸»åŠŸèƒ½ï¼‰ */
+    /* OLED ¾¡ÔçÉÏµçÏÔÊ¾£¨ÕÒ²»µ½ÆÁÖ»»á´òÈÕÖ¾£¬²»Ó°ÏìÖ÷¹¦ÄÜ£© */
+#if ENABLE_OLED
     oled_init_start();
+#endif
 
-    /* çŠ¶æ€æŒ‡ç¤ºç¯ï¼šä¸Šç”µå…ˆç†„ç­ = "è¿˜ä¸èƒ½å½•éŸ³"ï¼Œç­‰ SD/éº¦å…‹é£éƒ½å°±ç»ªæ‰å¸¸äº® */
+    /* ×´Ì¬Ö¸Ê¾µÆ£ºÉÏµçÏÈÏ¨Ãğ = "»¹²»ÄÜÂ¼Òô"£¬µÈ SD/Âó¿Ë·ç¶¼¾ÍĞ÷²Å³£ÁÁ */
     led_init();
     xTaskCreatePinnedToCore(led_task, "led", 2048, NULL, 4, NULL, 0);
 
-    /* BOOT é”® */
+    /* BOOT ¼ü */
     gpio_config_t key_cfg = {
         .pin_bit_mask = (1ULL << KEY_GPIO),
         .mode = GPIO_MODE_INPUT,
@@ -733,22 +1001,45 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(gpio_config(&key_cfg));
 
-    /* SD å¡å’Œéº¦å…‹é£å…ˆåˆå§‹åŒ–ï¼šè¿™ä¸¤ä¸ªæœ€åƒèµ„æºï¼Œåˆ«è®© WiFi æŠ¢å äº†å®ƒä»¬çš„æœºä¼š */
-    if (mount_sdcard() != ESP_OK) {
-        ESP_LOGE(TAG, "SD å¡ä¸å¯ç”¨ï¼šLED ä¿æŒç†„ç­ï¼ŒæŒ‰é”®æ— æ•ˆï¼ˆæ— æ³•å½•éŸ³å­˜å‚¨ï¼‰");
-        oled_set_state(OLED_ST_ERROR);
-        return;
+    /* SD ¿¨²åÈë¼ì²âÒı½Å£¨GPIO34£©£ºÎŞÄÚ²¿ÉÏÏÂÀ­£¬¿¿Íâ²¿ 10k ÉÏÀ­ */
+    gpio_config_t cd_cfg = {
+        .pin_bit_mask = (1ULL << SD_PIN_CD),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&cd_cfg));
+
+    /* ²å¿¨ºó²Å³õÊ¼»¯ SD ¿¨£»¹ÒÔØÊ§°Ü£¨»µ¿¨/½Ó´¥²»Á¼£©Ê±°Î³öÖØ²å¼´¿ÉÖØÊÔ */
+    while (1) {
+        if (!sd_card_inserted_stable()) {
+            ESP_LOGI(TAG, "Î´¼ì²âµ½ SD ¿¨£¨GPIO34=¸ßµçÆ½£©£¬Çë²å¿¨...");
+            oled_set_sd_ok(false);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        ESP_LOGI(TAG, "¼ì²âµ½ SD ¿¨²åÈë£¬¿ªÊ¼³õÊ¼»¯...");
+        if (mount_sdcard() == ESP_OK) {
+            break;
+        }
+        ESP_LOGE(TAG, "SD ¿¨³õÊ¼»¯Ê§°Ü£¬Çë°Î³öºóÖØĞÂ²åÈëÖØÊÔ");
+        ESP_LOGE(TAG, "£¨¼ì²é MISO 10k ÉÏÀ­ / ½ÓÏß / ¿¨ÊÇ·ñ FAT32£©");
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
     if (mic_init() != ESP_OK) {
-        ESP_LOGE(TAG, "éº¦å…‹é£åˆå§‹åŒ–å¤±è´¥ï¼šLED ä¿æŒç†„ç­ï¼ŒæŒ‰é”®æ— æ•ˆï¼ˆæ— æ³•å½•éŸ³å­˜å‚¨ï¼‰");
+        ESP_LOGE(TAG, "Âó¿Ë·ç³õÊ¼»¯Ê§°Ü£ºLED ±£³ÖÏ¨Ãğ£¬°´¼üÎŞĞ§£¨ÎŞ·¨Â¼Òô´æ´¢£©");
         oled_set_state(OLED_ST_ERROR);
         return;
     }
 
-    /* åˆ°è¿™é‡Œå­˜å‚¨å’Œéº¦å…‹é£éƒ½å¥½äº†ï¼Œæ‰å…è®¸å½•éŸ³ï¼ˆLED å¸¸äº® / æŒ‰é”®ç”Ÿæ•ˆï¼‰ */
+    /* µ½ÕâÀï´æ´¢ºÍÂó¿Ë·ç¶¼ºÃÁË£¬²ÅÔÊĞíÂ¼Òô£¨LED ³£ÁÁ / °´¼üÉúĞ§£© */
     s_storage_ok = true;
     oled_set_sd_ok(true);
     oled_set_state(OLED_ST_READY);
+
+    /* Â¼Òô×îÏÈÅÜÆğÀ´£¨ºË 1£©£»WiFi/FTP/HTTP ÔÚºóÌ¨ÂıÂıÁ¬£¬²»×èÈûÂ¼Òô */
+    xTaskCreatePinnedToCore(record_task, "record", 8192, NULL, 5, NULL, 1);
 
 #if ENABLE_WIFI_FTP
     esp_err_t ret = nvs_flash_init();
@@ -760,26 +1051,32 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* è¿æ¥ WiFiï¼šä¼˜å…ˆç”¨é…ç½®ç½‘é¡µä¿å­˜çš„å‡­æ®ï¼ˆNVSï¼‰ï¼Œæ²¡æœ‰åˆ™ç”¨ config.h é»˜è®¤å€¼ */
-    char ssid[33] = WIFI_SSID;
-    char pass[65] = WIFI_PASSWORD;
-    if (wifi_cfg_load(ssid, sizeof(ssid), pass, sizeof(pass))) {
-        ESP_LOGI(TAG, "ä½¿ç”¨å·²ä¿å­˜çš„ WiFi é…ç½®: %s", ssid);
-    }
+    /* GPIO33 °´¼ü£º¶Ì°´ = ÔİÍ£/¼ÌĞøÂ¼Òô£¬³¤°´ 3 Ãë = ½øÈëÅäÖÃÄ£Ê½¡£
+       ÔÚ WiFi Á¬½ÓÖ®Ç°¾ÍÆô¶¯£¬±£Ö¤Ã»Á¬ÉÏ WiFi Ê±¶Ì°´ÔİÍ£Ò²ºÃÓÃ */
+    wifi_cfg_set_short_press_cb(record_toggle_pause);
+    wifi_cfg_button_start();
 
-    if (wifi_sta_start(ssid, pass)) {
-        /* FTP æœåŠ¡å™¨å¸¸é©»ï¼ŒWiFi æ–­çº¿é‡è¿åæ— éœ€é‡å¯å³å¯ç»§ç»­ç”¨ */
+    /* Á¬½Ó WiFi£ºÒÀĞò³¢ÊÔ NVS ÒÑ´æµÄ¶à×éÅäÖÃ£¨×î¶à 3 ×é ¡Á 2 ÂÖ£© */
+    if (wifi_sta_connect()) {
+        /* FTP ·şÎñÆ÷³£×¤£¬WiFi ¶ÏÏßÖØÁ¬ºóÎŞĞèÖØÆô¼´¿É¼ÌĞøÓÃ */
         if (ftp_server_start(SD_MOUNT_POINT) != ESP_OK) {
-            ESP_LOGE(TAG, "FTP æœåŠ¡å™¨å¯åŠ¨å¤±è´¥");
+            ESP_LOGE(TAG, "FTP ·şÎñÆ÷Æô¶¯Ê§°Ü");
         }
-        /* HTTP åœ¨çº¿æ’­æ”¾æœåŠ¡ï¼šæµè§ˆå™¨è®¿é—® http://<è®¾å¤‡IP>/ å³å¯åœ¨çº¿å¬å½•éŸ³ */
+        /* HTTP ÔÚÏß²¥·Å·şÎñ£ºä¯ÀÀÆ÷·ÃÎÊ http://<Éè±¸IP>/ ¼´¿ÉÔÚÏßÌıÂ¼Òô */
         if (http_server_start(SD_MOUNT_POINT) != ESP_OK) {
-            ESP_LOGE(TAG, "HTTP æœåŠ¡å™¨å¯åŠ¨å¤±è´¥");
+            ESP_LOGE(TAG, "HTTP ·şÎñÆ÷Æô¶¯Ê§°Ü");
         }
-        /* é•¿æŒ‰ GPIO33 æŒ‰é”®å¯è¿›å…¥ WiFi é…ç½®æ¨¡å¼ï¼ˆçƒ­ç‚¹ HIBO_configï¼‰ */
-        wifi_cfg_button_start();
+    } else {
+        /* ËùÓĞ WiFi Á½ÂÖ¶¼Ã»Á¬ÉÏ£º×Ô¶¯½øÈëÅäÖÃÄ£Ê½£¬µÈÓÃ»§ÅäĞÂÍøÂç */
+        ESP_LOGW(TAG, "ËùÓĞ WiFi ¾ùÁ¬½ÓÊ§°Ü£¬×Ô¶¯½øÈëÅäÖÃÄ£Ê½£¨ÈÈµã %s£©", CFG_AP_SSID);
+        wifi_cfg_enter_config();
     }
 #endif
 
-    xTaskCreatePinnedToCore(record_task, "record", 8192, NULL, 5, NULL, 1);
+#if ENABLE_UDP_STREAM
+    /* UDP ÊµÊ±´«Éù£º±ØĞëÔÚ esp_netif_init()£¨lwIP Ğ­ÒéÕ»³õÊ¼»¯£©Ö®ºó´´½¨¡£
+       Ö®Ç°·ÅÔÚ WiFi ³õÊ¼»¯Ö®Ç°£¬socket() ÔÚĞ­ÒéÕ»Î´¾ÍĞ÷Ê±´¥·¢
+       "assert failed: tcpip_send_msg_wait_sem (Invalid mbox)" µ¼ÖÂ·´¸´ÖØÆô */
+    xTaskCreatePinnedToCore(udp_stream_task, "udps", 4096, NULL, 3, NULL, 0);
+#endif
 }

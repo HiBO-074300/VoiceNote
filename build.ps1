@@ -1,7 +1,7 @@
-# ESP32 å·¥ç¨‹ç¼–è¯‘è„šæœ¬
-# ç”¨æ³•ï¼ˆPowerShellï¼‰: .\build.ps1          ç¼–è¯‘
-#                    .\build.ps1 flash    ç¼–è¯‘å¹¶çƒ§å½•ï¼ˆçƒ§å½•å‰æ”¹ PORTï¼‰
-#                    .\build.ps1 monitor  æ‰“å¼€ä¸²å£ç›‘è§†
+# ESP32 ¹¤³Ì±àÒë½Å±¾
+# ÓÃ·¨£¨PowerShell£©: .\build.ps1          ±àÒë
+#                    .\build.ps1 flash    ±àÒë²¢ÉÕÂ¼£¨ÉÕÂ¼Ç°¸Ä PORT£©
+#                    .\build.ps1 monitor  ´ò¿ª´®¿Ú¼àÊÓ
 
 param(
     [Parameter(Position = 0)]
@@ -13,10 +13,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# æ¿€æ´» ESP-IDF v5.3.1 ç¯å¢ƒï¼ˆIDF_PATH / å·¥å…·é“¾ / Pythonï¼‰
-$env:IDF_TOOLS_PATH = 'D:\APP\Espressif'
-$env:IDF_PATH = 'D:\APP\Espressif\frameworks\esp-idf-v5.3.1'
-. "$env:IDF_PATH\export.ps1"
+# esptool Êä³öº¬Ï£À°×Ö·û£¬GBK ¿ØÖÆÌ¨»á UnicodeEncodeError£¬Ç¿ÖÆ Python Êä³ö UTF-8
+$env:PYTHONIOENCODING = 'utf-8'
+
+# ¼¤»î ESP-IDF v5.5.4 »·¾³£¨ÄÚ²¿»áÏÈ°Ñ×¨ÓÃ Python 3.11 ¼ÓÈë PATH ÔÙµ÷ export.ps1£©
+. 'D:\DATA\Espressif\activate-idf.ps1' | Out-Null
 
 Set-Location $PSScriptRoot
 

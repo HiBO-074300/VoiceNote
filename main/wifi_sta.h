@@ -2,13 +2,13 @@
 
 #include <stdbool.h>
 
-/**
- * @brief 初始化 WiFi Station 模式并连接热点（非阻塞，内部自动重连）
+/*
+ * WiFi 多组连接
  *
- * 必须先调用 esp_netif_init() 和 esp_event_loop_create_default()
- *
- * @param ssid      WiFi 名称
- * @param password  WiFi 密码（开放网络传 ""）
- * @return true  参数下发成功
+ * 依序尝试 NVS 中已存的 WiFi（最多 3 组，见 wifi_cfg.h），
+ * 若一组都没存则使用 config.h 里的编译默认值。
+ * 共尝试 2 轮（WIFI_ROUNDS），全部失败返回 false，
+ * 上层应据此进入 WiFi 配置模式（wifi_cfg_enter_config）。
+ * 任一组成功即返回 true 并保持连接，断线自动重连该组。
  */
-bool wifi_sta_start(const char *ssid, const char *password);
+bool wifi_sta_connect(void);

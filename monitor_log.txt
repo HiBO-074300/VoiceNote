@@ -53,24 +53,24 @@ I (513) spi_flash: detected chip: generic
 I (515) spi_flash: flash io: dio
 I (519) main_task: Started on CPU0
 I (529) main_task: Calling app_main()
-I (529) recorder: ESP32 ¼���� SD ��  |  ������ 16000 Hz, 16bit ������
-I (529) oled: �ҵ� OLED����ַ 0x3C
-I (589) oled: OLED ��ϻ�������ʾ��30 �룩������Ӧ 8 �зֱ�Ϊ A~H �ظ���ĸ
-I (1029) recorder: �� 400 kHz ���ֹ��� SD ��...
+I (529) recorder: ESP32 ????? SD ??  |  ?????? 16000 Hz, 16bit ??????
+I (529) oled: ??? OLED????? 0x3C
+I (589) oled: OLED ?????????????30 ????????? 8 ?��??? A~H ??????
+I (1029) recorder: ?? 400 kHz ??????? SD ??...
 I (1029) sdspi_transaction: cmd=52, R1 response: command not supported
 I (1069) sdspi_transaction: cmd=5, R1 response: command not supported
-I (1149) recorder: SD �����ֳɹ�����ʼ������...
-I (1159) recorder: ���ٵ� 4000 kHz����дУ��ͨ��
-I (1159) recorder: ���ٵ� 10000 kHz����дУ��ͨ��
-I (1159) recorder: ���ٵ� 20000 kHz����дУ��ͨ��
-I (1159) recorder: SD �����չ���Ƶ��: 20000 kHz
+I (1149) recorder: SD ???????????????????...
+I (1159) recorder: ????? 4000 kHz????�է�?????
+I (1159) recorder: ????? 10000 kHz????�է�?????
+I (1159) recorder: ????? 20000 kHz????�է�?????
+I (1159) recorder: SD ????????????: 20000 kHz
 Name: SU04G
 Type: SDHC
 Speed: 400.00 kHz (limit: 400.00 kHz)
 Size: 3781MB
 CSD: ver=2, sector_size=512, capacity=7744512 read_bl_len=9
 SSR: bus_width=1
-I (1179) recorder: I2S ������˷��Ѿ��� @ 16000 Hz
+I (1179) recorder: I2S ????????????? @ 16000 Hz
 I (1219) wifi:wifi driver task: 3ffd3908, prio:23, stack:6656, core=0
 I (1229) wifi:wifi firmware version: 0947e8b
 I (1229) wifi:wifi certification version: v7.0
@@ -97,11 +97,11 @@ W (1299) wifi:Password length matches WPA2 standards, authmode threshold changes
 I (1309) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06
 I (1399) wifi:mode : sta (08:3a:f2:3e:c4:90)
 I (1399) wifi:enable tsf
-I (1399) wifi: �������� "@HiBo"����̨�Զ����������Ϻ���ӡ IP��
-I (1399) wifi: STA ���������������� @HiBo ...
-I (1409) ftp: FTP ���������������˿� 21����Ŀ¼ /sdcard
+I (1399) wifi: ???????? "@HiBo"?????????????????????? IP??
+I (1399) wifi: STA ???????????????? @HiBo ...
+I (1409) ftp: FTP ????????????????? 21?????? /sdcard
 I (1409) main_task: Returned from app_main()
-I (1409) recorder: �����У���һ�� BOOT ��(GPIO0)��ʼ¼��
+I (1409) recorder: ?????��?????? BOOT ??(GPIO0)??????
 I (3819) wifi:new:<6,0>, old:<1,0>, ap:<255,255>, sta:<6,0>, prof:1, snd_ch_cfg:0x0
 I (3819) wifi:state: init -> auth (0xb0)
 I (5079) wifi:state: auth -> assoc (0x0)
@@ -118,9 +118,9 @@ I (7649) wifi:<ba-add>idx:0 (ifx:0, 10:5f:02:b3:ec:c4), tid:6, ssn:2, winSize:64
 I (7699) wifi:AP's beacon interval = 102400 us, DTIM period = 1
 I (7829) wifi:<ba-add>idx:1 (ifx:0, 10:5f:02:b3:ec:c4), tid:0, ssn:0, winSize:64
 I (8809) esp_netif_handlers: sta ip: 192.168.10.116, mask: 255.255.255.0, gw: 192.168.10.1
-I (8809) wifi: ===== WiFi ������ =====
+I (8809) wifi: ===== WiFi ?????? =====
 I (8809) wifi:   IP      : 192.168.10.116
-I (8809) wifi:   ����    : 192.168.10.1
-I (8809) wifi:   ��������: 255.255.255.0
-I (8819) wifi:   FTP ����: ftp://192.168.10.116  (�˿� 21)
+I (8809) wifi:   ????    : 192.168.10.1
+I (8809) wifi:   ????????: 255.255.255.0
+I (8819) wifi:   FTP ????: ftp://192.168.10.116  (??? 21)
 I (8819) wifi: =======================

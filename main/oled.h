@@ -13,6 +13,7 @@ typedef enum {
     OLED_ST_INIT = 0,       // 上电初始化中
     OLED_ST_READY,          // 空闲，可录音
     OLED_ST_REC,            // 录音中
+    OLED_ST_PAUSE,          // 录音暂停
     OLED_ST_CONFIG,         // WiFi 配置模式（热点开启）
     OLED_ST_ERROR,          // 存储异常
 } oled_state_t;

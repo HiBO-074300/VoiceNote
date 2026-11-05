@@ -1,8 +1,8 @@
 /*
- * ESP32 ¼«¼ò FTP ·şÎñÆ÷£¨±»¶¯Ä£Ê½ PASV£©
+ * ESP32 æç®€ FTP æœåŠ¡å™¨ï¼ˆè¢«åŠ¨æ¨¡å¼ PASVï¼‰
  *
- * °Ñ SD ¿¨ÉÏµÄÎÄ¼şÍ¨¹ı¾ÖÓòÍø¹²Ïí³öÀ´£¬Windows ×ÊÔ´¹ÜÀíÆ÷ / FileZilla / °²×¿ÎÄ¼ş¹ÜÀíÆ÷¶¼ÄÜÖ±½ÓÁ¬¡£
- * ¸ùÄ¿Â¼ËøËÀÔÚ /sdcard£¬¿Í»§¶ËÓÃ ../ Ò²ÌÓ²»³öÈ¥¡£
+ * æŠŠ SD å¡ä¸Šçš„æ–‡ä»¶é€šè¿‡å±€åŸŸç½‘å…±äº«å‡ºæ¥ï¼ŒWindows èµ„æºç®¡ç†å™¨ / FileZilla / å®‰å“æ–‡ä»¶ç®¡ç†å™¨éƒ½èƒ½ç›´æ¥è¿ã€‚
+ * æ ¹ç›®å½•é”æ­»åœ¨ /sdcardï¼Œå®¢æˆ·ç«¯ç”¨ ../ ä¹Ÿé€ƒä¸å‡ºå»ã€‚
  */
 
 #include "ftp_server.h"
@@ -30,16 +30,16 @@ static const char *TAG = "ftp";
 #define FTP_PORT            21
 #define FTP_MAX_CLIENTS     3
 #define FTP_SESSION_STACK   6144
-#define FTP_SESSION_PRIO    4            /* µÍÓÚÂ¼ÒôÈÎÎñ(5)£¬±£Ö¤Â¼Òô²»±»ÇÀÕ¼Â¼ÒôÓÅÏÈ¼¶ */
+#define FTP_SESSION_PRIO    4            /* ä½äºå½•éŸ³ä»»åŠ¡(5)ï¼Œä¿è¯å½•éŸ³ä¸è¢«æŠ¢å å½•éŸ³ä¼˜å…ˆçº§ */
 #define FTP_LINE_BUF        320
 #define FTP_DATA_BUF        4096
 #define FTP_MAX_PATH        300
-/* Æ´½ÓÖĞ¼äÁ¿ÁôË«±¶¿Õ¼ä£¬±ÜÃâ±àÒëÆ÷ÅĞ¶¨¿ÉÄÜ½Ø¶Ï */
+/* æ‹¼æ¥ä¸­é—´é‡ç•™åŒå€ç©ºé—´ï¼Œé¿å…ç¼–è¯‘å™¨åˆ¤å®šå¯èƒ½æˆªæ–­ */
 #define FTP_PATH_BUF        (FTP_MAX_PATH * 2)
-#define FTP_CTRL_TIMEOUT_S  300          /* ¿ØÖÆÁ¬½Ó¿ÕÏĞ³¬Ê± */
+#define FTP_CTRL_TIMEOUT_S  300          /* æ§åˆ¶è¿æ¥ç©ºé—²è¶…æ—¶ */
 #define FTP_DATA_TIMEOUT_S  15
 
-/* FTP µÇÂ¼ÕËºÅÃÜÂë£º¼û config.h£¨°ÑÃÜÂëÁô¿Õ = ÄäÃûÃâÃÜµÇÂ¼£© */
+/* FTP ç™»å½•è´¦å·å¯†ç ï¼šè§ config.hï¼ˆæŠŠå¯†ç ç•™ç©º = åŒ¿åå…å¯†ç™»å½•ï¼‰ */
 #ifndef FTP_USERNAME
 #define FTP_USERNAME  "esp32"
 #endif
@@ -51,20 +51,20 @@ static char s_ftp_root[32] = "/sdcard";
 static volatile int s_client_count = 0;
 
 typedef struct {
-    int  ctrl;                           /* ¿ØÖÆÁ¬½Ó socket */
-    int  pasv_listen;                    /* PASV ¼àÌı socket£¬-1 = Î´¿ªÆô */
-    int  data;                           /* ÒÑ½¨Á¢µÄÊı¾İÁ¬½Ó socket */
+    int  ctrl;                           /* æ§åˆ¶è¿æ¥ socket */
+    int  pasv_listen;                    /* PASV ç›‘å¬ socketï¼Œ-1 = æœªå¼€å¯ */
+    int  data;                           /* å·²å»ºç«‹çš„æ•°æ®è¿æ¥ socket */
     char root[32];
     char cwd[FTP_MAX_PATH];
     bool auth_ok;
     bool should_quit;
     char user[64];
     char rename_from[FTP_MAX_PATH];
-    struct sockaddr_in port_addr;        /* PORT Ö÷¶¯Ä£Ê½µØÖ· */
+    struct sockaddr_in port_addr;        /* PORT ä¸»åŠ¨æ¨¡å¼åœ°å€ */
     bool use_port;
 } ftp_session_t;
 
-/* ---------------------------- »ù´¡ÊÕ·¢ ---------------------------- */
+/* ---------------------------- åŸºç¡€æ”¶å‘ ---------------------------- */
 
 static int send_all(int fd, const void *buf, size_t len)
 {
@@ -80,7 +80,7 @@ static int send_all(int fd, const void *buf, size_t len)
     return 0;
 }
 
-/* ·¢Ò»ĞĞ FTP ÏìÓ¦£¬×Ô¶¯²¹ \r\n£»Ö§³Ö¶àĞĞ£¨ÔÚ fmt ÀïÊÖĞ´ \r\n£© */
+/* å‘ä¸€è¡Œ FTP å“åº”ï¼Œè‡ªåŠ¨è¡¥ \r\nï¼›æ”¯æŒå¤šè¡Œï¼ˆåœ¨ fmt é‡Œæ‰‹å†™ \r\nï¼‰ */
 static void ftp_send(ftp_session_t *s, const char *fmt, ...)
 {
     char buf[320];
@@ -100,7 +100,7 @@ static void ftp_send(ftp_session_t *s, const char *fmt, ...)
     send_all(s->ctrl, buf, strlen(buf));
 }
 
-/* ¶ÁÒ»ĞĞÃüÁî£¨\r\n ½áÎ²£©£¬·µ»Ø 0 ³É¹¦£¬-1 Ê§°Ü/³¬Ê± */
+/* è¯»ä¸€è¡Œå‘½ä»¤ï¼ˆ\r\n ç»“å°¾ï¼‰ï¼Œè¿”å› 0 æˆåŠŸï¼Œ-1 å¤±è´¥/è¶…æ—¶ */
 static int read_line(ftp_session_t *s, char *buf, size_t max)
 {
     size_t idx = 0;
@@ -123,9 +123,9 @@ static int read_line(ftp_session_t *s, char *buf, size_t max)
     }
 }
 
-/* ---------------------------- Â·¾¶°²È« ---------------------------- */
+/* ---------------------------- è·¯å¾„å®‰å…¨ ---------------------------- */
 
-/* °Ñ¿Í»§¶Ë¸øµÄĞéÄâÂ·¾¶½âÎö³É¾ø¶ÔÂ·¾¶£¬²¢±£Ö¤½á¹ûÊ¼ÖÕÔÚ root Ö®ÄÚ */
+/* æŠŠå®¢æˆ·ç«¯ç»™çš„è™šæ‹Ÿè·¯å¾„è§£ææˆç»å¯¹è·¯å¾„ï¼Œå¹¶ä¿è¯ç»“æœå§‹ç»ˆåœ¨ root ä¹‹å†… */
 static bool path_resolve(ftp_session_t *s, const char *arg, char *out, size_t out_sz)
 {
     char input[FTP_PATH_BUF];
@@ -163,7 +163,7 @@ static bool path_resolve(ftp_session_t *s, const char *arg, char *out, size_t ou
             continue;
         }
         if (strcmp(seg, "..") == 0) {
-            /* ÍËµ½ root ¾ÍÍ£×¡£¬½ûÖ¹Ô½½ç */
+            /* é€€åˆ° root å°±åœä½ï¼Œç¦æ­¢è¶Šç•Œ */
             char *slash = strrchr(res, '/');
             if (slash && (size_t)(slash - res) >= strlen(s->root)) {
                 *slash = '\0';
@@ -192,14 +192,14 @@ static bool path_resolve(ftp_session_t *s, const char *arg, char *out, size_t ou
     return true;
 }
 
-/* °Ñ¾ø¶ÔÂ·¾¶»»Ëã»Ø¿Í»§¶Ë¿´µ½µÄĞéÄâÂ·¾¶ */
+/* æŠŠç»å¯¹è·¯å¾„æ¢ç®—å›å®¢æˆ·ç«¯çœ‹åˆ°çš„è™šæ‹Ÿè·¯å¾„ */
 static const char *to_virtual(const ftp_session_t *s, const char *abs_path)
 {
     const char *p = abs_path + strlen(s->root);
     return (p[0] == '\0') ? "/" : p;
 }
 
-/* ---------------------------- Êı¾İÁ¬½Ó ---------------------------- */
+/* ---------------------------- æ•°æ®è¿æ¥ ---------------------------- */
 
 static void close_pasv(ftp_session_t *s)
 {
@@ -227,7 +227,7 @@ static void set_sock_timeout(int fd, int seconds)
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 }
 
-/* °´µ±Ç°Ä£Ê½£¨PASV / PORT£©½¨Á¢Êı¾İÁ¬½Ó£¬·µ»Ø socket »ò -1 */
+/* æŒ‰å½“å‰æ¨¡å¼ï¼ˆPASV / PORTï¼‰å»ºç«‹æ•°æ®è¿æ¥ï¼Œè¿”å› socket æˆ– -1 */
 static int data_open(ftp_session_t *s)
 {
     struct timeval tv = {
@@ -263,7 +263,7 @@ static int data_open(ftp_session_t *s)
     return fd;
 }
 
-/* ---------------------------- ¾ßÌåÃüÁî ---------------------------- */
+/* ---------------------------- å…·ä½“å‘½ä»¤ ---------------------------- */
 
 static const char *skip_list_flags(const char *arg)
 {
@@ -372,7 +372,7 @@ static void cmd_retr(ftp_session_t *s, const char *arg)
                 break;
             }
             total += n;
-            /* µÍËÙ SD ¿¨ÉÏ²»Òª¿Õ×ªÕ¼Âú CPU£¬¸øÂ¼ÒôÈÎÎñÈÃÂ· */
+            /* ä½é€Ÿ SD å¡ä¸Šä¸è¦ç©ºè½¬å æ»¡ CPUï¼Œç»™å½•éŸ³ä»»åŠ¡è®©è·¯ */
             if (++blocks % 4 == 0) {
                 vTaskDelay(1);
             }
@@ -384,7 +384,7 @@ static void cmd_retr(ftp_session_t *s, const char *arg)
     close_data(s);
     (void)errno;
     ftp_send(s, "226 Transfer complete (%u bytes)", (unsigned)total);
-    ESP_LOGI(TAG, "ÏÂÔØ %s (%u ×Ö½Ú)", path, (unsigned)total);
+    ESP_LOGI(TAG, "ä¸‹è½½ %s (%u å­—èŠ‚)", path, (unsigned)total);
 }
 
 static void cmd_stor(ftp_session_t *s, const char *arg)
@@ -419,7 +419,7 @@ static void cmd_stor(ftp_session_t *s, const char *arg)
                 break;
             }
             if (fwrite(buf, 1, n, f) != (size_t)n) {
-                ESP_LOGE(TAG, "Ğ´ SD ¿¨Ê§°Ü£¨¿¨Âú/¿¨±»°Î³ö£¿£©");
+                ESP_LOGE(TAG, "å†™ SD å¡å¤±è´¥ï¼ˆå¡æ»¡/å¡è¢«æ‹”å‡ºï¼Ÿï¼‰");
                 break;
             }
             total += n;
@@ -433,10 +433,10 @@ static void cmd_stor(ftp_session_t *s, const char *arg)
     fclose(f);
     close_data(s);
     ftp_send(s, "226 Transfer complete (%u bytes)", (unsigned)total);
-    ESP_LOGI(TAG, "ÉÏ´« %s (%u ×Ö½Ú)", path, (unsigned)total);
+    ESP_LOGI(TAG, "ä¸Šä¼  %s (%u å­—èŠ‚)", path, (unsigned)total);
 }
 
-/* ---------------------------- ÃüÁî·Ö·¢ ---------------------------- */
+/* ---------------------------- å‘½ä»¤åˆ†å‘ ---------------------------- */
 
 static bool ftp_handle_line(ftp_session_t *s, char *line)
 {
@@ -456,7 +456,7 @@ static bool ftp_handle_line(ftp_session_t *s, char *line)
         *p = (char)toupper((unsigned char)*p);
     }
 
-    /* µÇÂ¼Ç°µÄ°×Ãûµ¥ÃüÁî */
+    /* ç™»å½•å‰çš„ç™½åå•å‘½ä»¤ */
     bool need_auth = strcmp(cmd, "USER") && strcmp(cmd, "PASS") && strcmp(cmd, "QUIT") &&
                      strcmp(cmd, "NOOP") && strcmp(cmd, "FEAT") && strcmp(cmd, "SYST") &&
                      strcmp(cmd, "OPTS") && strcmp(cmd, "ABOR") && strcmp(cmd, "TYPE");
@@ -475,10 +475,10 @@ static bool ftp_handle_line(ftp_session_t *s, char *line)
         if (anonymous || (strcmp(s->user, FTP_USERNAME) == 0 && arg && strcmp(arg, FTP_PASSWORD) == 0)) {
             s->auth_ok = true;
             ftp_send(s, "230 Login successful");
-            ESP_LOGI(TAG, "¿Í»§¶ËµÇÂ¼³É¹¦ (user=%s)%s", s->user, anonymous ? " [ÄäÃûÄ£Ê½]" : "");
+            ESP_LOGI(TAG, "å®¢æˆ·ç«¯ç™»å½•æˆåŠŸ (user=%s)%s", s->user, anonymous ? " [åŒ¿åæ¨¡å¼]" : "");
         } else {
             ftp_send(s, "530 Login incorrect");
-            ESP_LOGW(TAG, "µÇÂ¼Ê§°Ü (user=%s)", s->user);
+            ESP_LOGW(TAG, "ç™»å½•å¤±è´¥ (user=%s)", s->user);
         }
 
     } else if (strcmp(cmd, "SYST") == 0) {
@@ -531,7 +531,7 @@ static bool ftp_handle_line(ftp_session_t *s, char *line)
         struct sockaddr_in addr = {
             .sin_family = AF_INET,
             .sin_addr.s_addr = htonl(INADDR_ANY),
-            .sin_port = 0,                      /* ½»¸øÏµÍ³Ëæ»ú·ÖÅä¶Ë¿Ú */
+            .sin_port = 0,                      /* äº¤ç»™ç³»ç»Ÿéšæœºåˆ†é…ç«¯å£ */
         };
         if (bind(lfd, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(lfd, 1) != 0) {
             close(lfd);
@@ -541,7 +541,7 @@ static bool ftp_handle_line(ftp_session_t *s, char *line)
         s->pasv_listen = lfd;
         s->use_port = false;
 
-        /* ±¾»ú IP ´Ó¿ØÖÆÁ¬½ÓÈ¡ */
+        /* æœ¬æœº IP ä»æ§åˆ¶è¿æ¥å– */
         struct sockaddr_storage local;
         socklen_t slen = sizeof(local);
         getsockname(s->ctrl, (struct sockaddr *)&local, &slen);
@@ -596,7 +596,7 @@ static bool ftp_handle_line(ftp_session_t *s, char *line)
         }
 
     } else if (strcmp(cmd, "MDTM") == 0) {
-        /* °å×ÓÃ»ÓĞ RTC£¬Ê±¼äÃ»ÒâÒå£¬¸ø¸ö¹Ì¶¨ÖµÈÃ¿Í»§¶Ë²»±¨´í */
+        /* æ¿å­æ²¡æœ‰ RTCï¼Œæ—¶é—´æ²¡æ„ä¹‰ï¼Œç»™ä¸ªå›ºå®šå€¼è®©å®¢æˆ·ç«¯ä¸æŠ¥é”™ */
         ftp_send(s, "213 19800101000000");
 
     } else if (strcmp(cmd, "DELE") == 0) {
@@ -656,7 +656,7 @@ static bool ftp_handle_line(ftp_session_t *s, char *line)
     return true;
 }
 
-/* ---------------------------- »á»°ÈÎÎñ ---------------------------- */
+/* ---------------------------- ä¼šè¯ä»»åŠ¡ ---------------------------- */
 
 static void ftp_session_task(void *pv)
 {
@@ -681,11 +681,11 @@ static void ftp_session_task(void *pv)
 
     s_client_count--;
     free(s);
-    ESP_LOGI(TAG, "¿Í»§¶Ë¶Ï¿ª£¨µ±Ç°Á¬½ÓÊı %d£©", s_client_count);
+    ESP_LOGI(TAG, "å®¢æˆ·ç«¯æ–­å¼€ï¼ˆå½“å‰è¿æ¥æ•° %dï¼‰", s_client_count);
     vTaskDelete(NULL);
 }
 
-/* ---------------------------- ¼àÌıÈÎÎñ ---------------------------- */
+/* ---------------------------- ç›‘å¬ä»»åŠ¡ ---------------------------- */
 
 static void ftp_listen_task(void *pv)
 {
@@ -693,7 +693,7 @@ static void ftp_listen_task(void *pv)
 
     int listen_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listen_fd < 0) {
-        ESP_LOGE(TAG, "´´½¨¼àÌı socket Ê§°Ü");
+        ESP_LOGE(TAG, "åˆ›å»ºç›‘å¬ socket å¤±è´¥");
         vTaskDelete(NULL);
         return;
     }
@@ -707,19 +707,19 @@ static void ftp_listen_task(void *pv)
         .sin_port = htons(FTP_PORT),
     };
     if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        ESP_LOGE(TAG, "°ó¶¨ %d ¶Ë¿ÚÊ§°Ü", FTP_PORT);
+        ESP_LOGE(TAG, "ç»‘å®š %d ç«¯å£å¤±è´¥", FTP_PORT);
         close(listen_fd);
         vTaskDelete(NULL);
         return;
     }
     if (listen(listen_fd, FTP_MAX_CLIENTS) != 0) {
-        ESP_LOGE(TAG, "listen Ê§°Ü");
+        ESP_LOGE(TAG, "listen å¤±è´¥");
         close(listen_fd);
         vTaskDelete(NULL);
         return;
     }
 
-    ESP_LOGI(TAG, "FTP ·şÎñÆ÷ÒÑÆô¶¯£¬¶Ë¿Ú %d£¬¸ùÄ¿Â¼ %s", FTP_PORT, s_ftp_root);
+    ESP_LOGI(TAG, "FTP æœåŠ¡å™¨å·²å¯åŠ¨ï¼Œç«¯å£ %dï¼Œæ ¹ç›®å½• %s", FTP_PORT, s_ftp_root);
 
     for (;;) {
         struct sockaddr_in cli;
@@ -731,7 +731,7 @@ static void ftp_listen_task(void *pv)
         }
 
         if (s_client_count >= FTP_MAX_CLIENTS) {
-            ESP_LOGW(TAG, "Á¬½ÓÊıÒÑÂú(%d)£¬¾Ü¾øĞÂ¿Í»§¶Ë", FTP_MAX_CLIENTS);
+            ESP_LOGW(TAG, "è¿æ¥æ•°å·²æ»¡(%d)ï¼Œæ‹’ç»æ–°å®¢æˆ·ç«¯", FTP_MAX_CLIENTS);
             shutdown(fd, SHUT_RDWR);
             close(fd);
             continue;
@@ -755,7 +755,7 @@ static void ftp_listen_task(void *pv)
         char name[16];
         snprintf(name, sizeof(name), "ftp_%d", fd);
         if (xTaskCreate(ftp_session_task, name, FTP_SESSION_STACK, s, FTP_SESSION_PRIO, NULL) != pdPASS) {
-            ESP_LOGE(TAG, "´´½¨»á»°ÈÎÎñÊ§°Ü");
+            ESP_LOGE(TAG, "åˆ›å»ºä¼šè¯ä»»åŠ¡å¤±è´¥");
             s_client_count--;
             free(s);
             close(fd);
@@ -764,7 +764,7 @@ static void ftp_listen_task(void *pv)
 
         char ip_str[32];
         inet_ntoa_r(cli.sin_addr, ip_str, sizeof(ip_str) - 1);
-        ESP_LOGI(TAG, "¿Í»§¶Ë %s:%d ÒÑÁ¬½Ó£¨µ±Ç°Á¬½ÓÊı %d£©",
+        ESP_LOGI(TAG, "å®¢æˆ·ç«¯ %s:%d å·²è¿æ¥ï¼ˆå½“å‰è¿æ¥æ•° %dï¼‰",
                  ip_str, ntohs(cli.sin_port), s_client_count);
     }
 }

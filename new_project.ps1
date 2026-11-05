@@ -1,12 +1,12 @@
-# ESP32 æ–°å»ºå·¥ç¨‹è„šæœ¬ï¼ˆä»¥å½“å‰å·¥ç¨‹ä¸ºæ¨¡æ¿ï¼‰
-# ç”¨æ³•: .\new_project.ps1 -Name my_led
+# ESP32 ĞÂ½¨¹¤³Ì½Å±¾£¨ÒÔµ±Ç°¹¤³ÌÎªÄ£°å£©
+# ÓÃ·¨: .\new_project.ps1 -Name my_led
 #       .\new_project.ps1 -Name my_led -OutDir D:\DATA\projects
 #
-# ç”Ÿæˆ: <OutDir>\<Name>\
-#         CMakeLists.txt   é¡¹ç›®åå·²æ›¿æ¢ä¸º <Name>
+# Éú³É: <OutDir>\<Name>\
+#         CMakeLists.txt   ÏîÄ¿ÃûÒÑÌæ»»Îª <Name>
 #         main\CMakeLists.txt
 #         main\main.c
-#         build.ps1  backup.ps1  new_project.ps1  .gitignore  ä½¿ç”¨æ•™ç¨‹.md
+#         build.ps1  backup.ps1  new_project.ps1  .gitignore  Ê¹ÓÃ½Ì³Ì.md
 
 param(
     [Parameter(Mandatory = $true)]
@@ -24,16 +24,16 @@ if ([string]::IsNullOrWhiteSpace($OutDir)) {
 $dest = Join-Path $OutDir $Name
 
 if (Test-Path $dest) {
-    throw "ç›®æ ‡ç›®å½•å·²å­˜åœ¨: $dest"
+    throw "Ä¿±êÄ¿Â¼ÒÑ´æÔÚ: $dest"
 }
 
 New-Item -ItemType Directory -Path $dest -Force | Out-Null
 
-# æ‹·è´æºç ä¸è„šæœ¬ï¼Œè·³è¿‡ç¼–è¯‘äº§ç‰©å’Œ git
+# ¿½±´Ô´ÂëÓë½Å±¾£¬Ìø¹ı±àÒë²úÎïºÍ git
 Get-ChildItem -Path $src -Force | Where-Object { @('build', '.git') -notcontains $_.Name } |
     ForEach-Object { Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force }
 
-# é¡¶å±‚ CMakeLists.txt é‡Œæ›¿æ¢å·¥ç¨‹å
+# ¶¥²ã CMakeLists.txt ÀïÌæ»»¹¤³ÌÃû
 $topCmake = Join-Path $dest 'CMakeLists.txt'
 if (Test-Path $topCmake) {
     $content = Get-Content $topCmake -Raw
@@ -41,8 +41,8 @@ if (Test-Path $topCmake) {
     Set-Content -Path $topCmake -Value $content -NoNewline -Encoding UTF8
 }
 
-Write-Host "å·¥ç¨‹å·²åˆ›å»º: $dest" -ForegroundColor Green
-Write-Host "ä¸‹ä¸€æ­¥:" -ForegroundColor Yellow
+Write-Host "¹¤³ÌÒÑ´´½¨: $dest" -ForegroundColor Green
+Write-Host "ÏÂÒ»²½:" -ForegroundColor Yellow
 Write-Host "  cd `"$dest`""
 Write-Host "  .\build.ps1"
 Write-Host "  .\build.ps1 flash -Port COM3"

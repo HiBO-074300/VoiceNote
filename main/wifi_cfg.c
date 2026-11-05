@@ -27,38 +27,110 @@ static const char *TAG = "wificfg";
 
 static volatile bool s_active = false;   /* 配置模式进行中 */
 static char s_cur_ssid[33];              /* 当前生效的 WiFi 名（网页上展示） */
+static void (*s_short_cb)(void) = NULL;  /* GPIO33 短按回调（main.c 注册） */
+
+void wifi_cfg_set_short_press_cb(void (*cb)(void))
+{
+    s_short_cb = cb;
+}
 
 bool wifi_cfg_is_active(void)
 {
     return s_active;
 }
 
-/* ---------------------------- NVS 存取 ---------------------------- */
+/* ---------------------------- NVS 存取（多组） ---------------------------- */
 
-static bool nvs_save(const char *ssid, const char *pass)
+/* 生成索引键名：w0s/w0p, w1s/w1p, w2s/w2p */
+static void slot_key(int idx, bool is_pass, char *out, size_t out_len)
 {
-    nvs_handle_t h;
-    if (nvs_open("wificfg", NVS_READWRITE, &h) != ESP_OK) {
-        return false;
-    }
-    nvs_set_str(h, "ssid", ssid);
-    nvs_set_str(h, "pass", pass);
-    esp_err_t err = nvs_commit(h);
-    nvs_close(h);
-    return err == ESP_OK;
+    snprintf(out, out_len, "w%d%c", idx, is_pass ? 'p' : 's');
 }
 
-bool wifi_cfg_load(char *ssid, size_t ssid_len, char *pass, size_t pass_len)
+/* 读出第 idx 组；越界或不存在返回 false */
+bool wifi_cfg_get(int idx, char *ssid, size_t ssid_len, char *pass, size_t pass_len)
 {
+    if (idx < 0 || idx >= WIFI_SLOT_MAX) {
+        return false;
+    }
     nvs_handle_t h;
     if (nvs_open("wificfg", NVS_READONLY, &h) != ESP_OK) {
         return false;
     }
+    char key[8];
     size_t l1 = ssid_len, l2 = pass_len;
-    esp_err_t e1 = nvs_get_str(h, "ssid", ssid, &l1);
-    esp_err_t e2 = nvs_get_str(h, "pass", pass, &l2);
+    slot_key(idx, false, key, sizeof(key));
+    esp_err_t e1 = nvs_get_str(h, key, ssid, &l1);
+    slot_key(idx, true, key, sizeof(key));
+    esp_err_t e2 = nvs_get_str(h, key, pass, &l2);
     nvs_close(h);
     return e1 == ESP_OK && e2 == ESP_OK;
+}
+
+/* 已存组数（0~3）；兼容旧版单组存储（"ssid"/"pass" 键视为第 1 组） */
+int wifi_cfg_count(void)
+{
+    nvs_handle_t h;
+    uint8_t cnt = 0;
+    if (nvs_open("wificfg", NVS_READONLY, &h) != ESP_OK) {
+        return 0;
+    }
+    if (nvs_get_u8(h, "wcnt", &cnt) != ESP_OK) {
+        /* 没有新式计数值：检查旧版键 */
+        char tmp[33];
+        size_t l = sizeof(tmp);
+        cnt = (nvs_get_str(h, "ssid", tmp, &l) == ESP_OK) ? 1 : 0;
+    }
+    nvs_close(h);
+    if (cnt > WIFI_SLOT_MAX) {
+        cnt = WIFI_SLOT_MAX;
+    }
+    return (int)cnt;
+}
+
+/* 新增一组 WiFi：新组排第 1 位，原有组依次后移，最多保留 3 组（最旧的被挤掉） */
+bool wifi_cfg_add(const char *ssid, const char *pass)
+{
+    /* 先读出原有的组 */
+    char old_s[WIFI_SLOT_MAX][33] = { 0 };
+    char old_p[WIFI_SLOT_MAX][65] = { 0 };
+    int old_cnt = wifi_cfg_count();
+    if (old_cnt > WIFI_SLOT_MAX - 1) {
+        old_cnt = WIFI_SLOT_MAX - 1;
+    }
+    for (int i = 0; i < old_cnt; i++) {
+        wifi_cfg_get(i, old_s[i], sizeof(old_s[i]), old_p[i], sizeof(old_p[i]));
+    }
+
+    nvs_handle_t h;
+    if (nvs_open("wificfg", NVS_READWRITE, &h) != ESP_OK) {
+        return false;
+    }
+
+    char key[8];
+    slot_key(0, false, key, sizeof(key));
+    nvs_set_str(h, key, ssid);
+    slot_key(0, true, key, sizeof(key));
+    nvs_set_str(h, key, pass);
+    for (int i = 0; i < old_cnt; i++) {
+        slot_key(i + 1, false, key, sizeof(key));
+        nvs_set_str(h, key, old_s[i]);
+        slot_key(i + 1, true, key, sizeof(key));
+        nvs_set_str(h, key, old_p[i]);
+    }
+    uint8_t new_cnt = (uint8_t)(old_cnt + 1);
+    nvs_set_u8(h, "wcnt", new_cnt);
+    esp_err_t err = nvs_commit(h);
+    nvs_close(h);
+
+    ESP_LOGI(TAG, "WiFi 列表已更新，共 %d 组（新组: %s）", (int)new_cnt, ssid);
+    return err == ESP_OK;
+}
+
+/* 兼容旧接口：读取第 1 组 */
+bool wifi_cfg_load(char *ssid, size_t ssid_len, char *pass, size_t pass_len)
+{
+    return wifi_cfg_get(0, ssid, ssid_len, pass, pass_len);
 }
 
 /* ---------------------------- 工具 ---------------------------- */
@@ -86,23 +158,41 @@ static void url_decode(char *s)
 
 static esp_err_t handler_home(httpd_req_t *req)
 {
-    char page[1024];
+    char page[1536];
+    char list[512] = "";
+
+    /* 列出已存的 WiFi 组 */
+    int cnt = wifi_cfg_count();
+    if (cnt == 0) {
+        snprintf(list, sizeof(list), "<li>（无，用编译默认值）</li>");
+    }
+    for (int i = 0; i < cnt; i++) {
+        char ssid[33];
+        char pass[65];
+        if (wifi_cfg_get(i, ssid, sizeof(ssid), pass, sizeof(pass))) {
+            char row[80];
+            snprintf(row, sizeof(row), "<li>%d. %s</li>", i + 1, ssid);
+            strncat(list, row, sizeof(list) - strlen(list) - 1);
+        }
+    }
+
     int n = snprintf(page, sizeof(page),
         "<!DOCTYPE html><html><head><meta charset='gb2312'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>WiFi 配置</title></head><body style='font-family:sans-serif'>"
-        "<h2>SD 录音机 WiFi 配置</h2>"
-        "<p>当前 WiFi：<b>%s</b></p>"
+        "<h2>声记 VoiceNote · WiFi 配置</h2>"
+        "<p>已存 WiFi（连接时按此顺序尝试，最多 3 组）：</p>"
+        "<ol>%s</ol>"
         "<form action='/save' method='get'>"
-        "<p>新 WiFi 名称：<br>"
+        "<p>新增 WiFi 名称（将排到第 1 位）：<br>"
         "<input name='ssid' maxlength='32' style='width:100%%'></p>"
-        "<p>新 WiFi 密码：<br>"
+        "<p>新增 WiFi 密码：<br>"
         "<input name='pass' maxlength='64' style='width:100%%'></p>"
         "<p><input type='submit' value='保存并重启'></p>"
         "</form>"
-        "<p style='color:#888'>保存后设备会自动重启并连接新 WiFi，"
-        "IP 地址会显示在屏幕上。</p>"
-        "</body></html>", s_cur_ssid);
+        "<p style='color:#888'>保存后设备会自动重启并依次尝试连接，"
+        "IP 地址会显示在屏幕上。超过 3 组时最旧的被挤掉。</p>"
+        "</body></html>", list);
     httpd_resp_set_type(req, "text/html; charset=gb2312");
     httpd_resp_send(req, page, n);
     return ESP_OK;
@@ -133,12 +223,12 @@ static esp_err_t handler_save(httpd_req_t *req)
         return ESP_OK;
     }
 
-    if (!nvs_save(ssid, pass)) {
+    if (!wifi_cfg_add(ssid, pass)) {
         ESP_LOGE(TAG, "NVS 保存失败");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "保存失败");
         return ESP_OK;
     }
-    ESP_LOGI(TAG, "已保存新 WiFi 配置: %s，设备即将重启", ssid);
+    ESP_LOGI(TAG, "已新增 WiFi 配置: %s，设备即将重启", ssid);
 
     httpd_resp_set_type(req, "text/html; charset=gb2312");
     httpd_resp_send(req,
@@ -157,15 +247,17 @@ static esp_err_t handler_save(httpd_req_t *req)
 static void start_config_mode(void)
 {
     if (s_active) {
+        vTaskDelete(NULL);
         return;
     }
     s_active = true;
 
-    /* 网页上展示当前 WiFi 名（NVS 有就用，没有用编译时默认值） */
-    strncpy(s_cur_ssid, WIFI_SSID, sizeof(s_cur_ssid) - 1);
-    s_cur_ssid[sizeof(s_cur_ssid) - 1] = '\0';
+    /* 展示第 1 组已存 WiFi 名（NVS 有就用，没有用编译时默认值） */
     char tmp_pass[65];
-    wifi_cfg_load(s_cur_ssid, sizeof(s_cur_ssid), tmp_pass, sizeof(tmp_pass));
+    if (!wifi_cfg_get(0, s_cur_ssid, sizeof(s_cur_ssid), tmp_pass, sizeof(tmp_pass))) {
+        strncpy(s_cur_ssid, WIFI_SSID, sizeof(s_cur_ssid) - 1);
+        s_cur_ssid[sizeof(s_cur_ssid) - 1] = '\0';
+    }
 
     ESP_LOGI(TAG, "===== 进入 WiFi 配置模式 =====");
     oled_set_ip("192.168.4.1");
@@ -207,6 +299,12 @@ static void start_config_mode(void)
 
 /* ---------------------------- 按键任务 ---------------------------- */
 
+/* 配置模式入口任务：start_config_mode 末尾 vTaskDelete(NULL)，不会返回 */
+static void config_task_entry(void *arg)
+{
+    start_config_mode();
+}
+
 static void button_task(void *arg)
 {
     gpio_config_t key_cfg = {
@@ -231,10 +329,10 @@ static void button_task(void *arg)
             }
             if (ms >= CFG_KEY_LONGPRESS_MS) {
                 ESP_LOGW(TAG, "长按 %d ms，进入 WiFi 配置模式", ms);
-                start_config_mode();                    /* 内部不返回 */
-                continue;
+                wifi_cfg_enter_config();                /* 内部创建独立任务 */
+            } else if (s_short_cb != NULL) {
+                s_short_cb();                           /* 短按：交给注册者处理 */
             }
-            /* 短按：忽略 */
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
@@ -243,4 +341,17 @@ static void button_task(void *arg)
 void wifi_cfg_button_start(void)
 {
     xTaskCreatePinnedToCore(button_task, "cfgkey", 3072, NULL, 3, NULL, 0);
+}
+
+/*
+ * 进入 WiFi 配置模式（自动兜底入口）。
+ * 在独立任务里运行：start_config_mode 末尾会 vTaskDelete(NULL)，
+ * 直接从 app_main 调用会误删主任务，所以包一层。
+ */
+void wifi_cfg_enter_config(void)
+{
+    if (s_active) {
+        return;
+    }
+    xTaskCreatePinnedToCore(config_task_entry, "wificfg", 4096, NULL, 3, NULL, 0);
 }
