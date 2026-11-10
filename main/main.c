@@ -18,7 +18,6 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_netif.h"
@@ -28,7 +27,7 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
-#include "lwip/sockets.h"
+#include "esp_wifi.h"
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "driver/i2s_pdm.h"
@@ -36,7 +35,6 @@
 #include "esp_heap_caps.h"
 #include "config.h"
 #include "wifi_sta.h"
-#include "ftp_server.h"
 #include "http_server.h"
 #include "wifi_cfg.h"
 #include "oled.h"
@@ -81,6 +79,11 @@ static const char *TAG = "recorder";
    已确认：I2C 翻转会串扰进麦克风产生噪声（与 I2S 线离得近），
    因此恢复显示的同时把 I2C 降到 100kHz（见 oled.c 的 OLED_FREQ_HZ） */
 #define ENABLE_OLED   1
+
+/* 录音期间关闭 WiFi 射频：彻底消除 WiFi 发射对麦克风数字链路的 RF/电流干扰。
+   代价：录音期间 FTP/HTTP/UDP 不可用；停止录音后自动重连（几秒，IP 一般不变）。
+   配置热点模式下不关（WiFi 是配置通道本身） */
+#define WIFI_OFF_DURING_REC   1
 
 /* 状态指示灯（双灯，高电平点亮）
  *   LED1 GPIO17 系统灯：常亮 = 可录音（空闲待机）；熄灭 = 存储异常
@@ -145,7 +148,6 @@ static volatile led_mode_t s_led_mode = LED_MODE_OFF;
 static volatile bool       s_storage_ok = false;   // 存储是否可用（不可用则按键无效）
 static bool                s_spi_bus_ready = false; // SPI 总线是否已初始化（重新挂载时跳过）
 static volatile bool       s_rec_pause_req = false; // GPIO33 短按请求：暂停/继续切换
-static volatile bool       s_recording_active = false; // 正在录音（UDP 传声任务让路用）
 
 /* ------------------------- SD 卡插入检测 ------------------------- */
 
@@ -465,27 +467,7 @@ static esp_err_t mic_init(void)
 /* ---------------------------- 读取采样点 ---------------------------- */
 /* 统一接口：读出 int16 PCM，out_samples 返回实际点数 */
 
-/*
- * mic_read 互斥包装：录音任务和 UDP 传声任务都会读麦克风，
- * I2S 通道与内部静态缓冲不支持并发访问，这里串行化。
- * 录音开始瞬间 UDP 任务可能正阻塞在读卡（最长一个缓冲 20ms），录音稍等即可。
- */
-static SemaphoreHandle_t s_mic_lock = NULL;
-
-static esp_err_t mic_read_inner(int16_t *out, size_t max_samples, size_t *out_samples);
-
 static esp_err_t mic_read(int16_t *out, size_t max_samples, size_t *out_samples)
-{
-    if (s_mic_lock == NULL) {
-        s_mic_lock = xSemaphoreCreateMutex();
-    }
-    xSemaphoreTake(s_mic_lock, portMAX_DELAY);
-    esp_err_t ret = mic_read_inner(out, max_samples, out_samples);
-    xSemaphoreGive(s_mic_lock);
-    return ret;
-}
-
-static esp_err_t mic_read_inner(int16_t *out, size_t max_samples, size_t *out_samples)
 {
     *out_samples = 0;
 
@@ -656,138 +638,6 @@ static void record_toggle_pause(void)
     s_rec_pause_req = true;
 }
 
-/*
- * 去毛刺（de-click）：PCB 上 I2S 位错误表现为孤立满幅尖峰 / 贴轨段。
- *   1) 孤立尖峰：某样本与前后样本都相差巨大 → 用前后均值替换
- *   2) 贴轨段：连续 >=4 个样本贴在 ±32700 附近 → 用两端线性插值替换
- * 只对付孤立的坏点，正常语音波形几乎不受影响。
- * 注意：这是软件补救，治本还是要修硬件（查 SCK/WS/SD 走线与 L/R 接地）。
- */
-static void mic_declick(int16_t *s, size_t n)
-{
-    const int T = 24000;                       // 尖峰判定阈值
-    for (size_t i = 1; i + 1 < n; i++) {
-        int a = s[i - 1], b = s[i], c = s[i + 1];
-        if (abs(b - a) > T && abs(b - c) > T) {
-            s[i] = (int16_t)((a + c) >> 1);
-        }
-    }
-    size_t i = 0;
-    while (i < n) {
-        if (s[i] >= 32700 || s[i] <= -32700) {
-            size_t j = i;
-            while (j < n && (s[j] >= 32700 || s[j] <= -32700)) {
-                j++;
-            }
-            if (j - i >= 4) {                  // 连续贴轨：判定为毛刺段
-                int lo = (i > 0) ? s[i - 1] : 0;
-                int hi = (j < n) ? s[j] : lo;
-                for (size_t k = i; k < j; k++) {
-                    s[k] = (int16_t)(lo + (int32_t)(hi - lo) * (int32_t)(k - i + 1) / (int32_t)(j - i + 1));
-                }
-            }
-            i = j;
-        } else {
-            i++;
-        }
-    }
-}
-
-/* ==================== UDP 实时传声（监听 / 虚拟麦克风） ====================
- * 把麦克风 PCM（16kHz/16bit/单声道）用 UDP 广播发到局域网。
- * 电脑端运行 udp_mic_receiver.py（Python + PyAudio）接收：
- *   - 直接监听，或写入 VB-Cable 虚拟声卡当作系统"麦克风"（微信/腾讯会议可选它）
- * - 每包 20ms = 320 样本 = 640 字节，端到端延迟约 50~150ms
- * - 与录音互斥：录音进行中本任务暂停读麦克风（录音优先，不抢 I2S）
- */
-#define ENABLE_UDP_STREAM    1        // 置 0 可整体关闭 UDP 传声
-#define UDP_STREAM_PORT      9000     // 电脑端监听的 UDP 端口
-#define UDP_SAMPLES_PER_PKT  320      // 每包样本数（20ms @ 16kHz）
-
-static void udp_stream_task(void *arg)
-{
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    if (sock < 0) {
-        ESP_LOGE(TAG, "UDP socket 创建失败");
-        vTaskDelete(NULL);
-        return;
-    }
-    int broadcast = 1;
-    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
-
-    /* 绑定端口：接收电脑端的"订阅"包。WiFi 广播丢包率高达 30~70%，
-       收到订阅后改用单播（有重传），丢包接近 0 */
-    struct sockaddr_in local = {
-        .sin_family = AF_INET,
-        .sin_port   = htons(UDP_STREAM_PORT),
-        .sin_addr.s_addr = INADDR_ANY,
-    };
-    bind(sock, (struct sockaddr *)&local, sizeof(local));
-
-    struct sockaddr_in dest = {
-        .sin_family = AF_INET,
-        .sin_port   = htons(UDP_STREAM_PORT),
-        .sin_addr.s_addr = 0,
-    };
-    struct sockaddr_in peer  = { 0 };   /* 已订阅的电脑地址 */
-    bool have_peer = false;
-    uint8_t sub[8];
-    socklen_t peer_len;
-
-    static int16_t buf[UDP_SAMPLES_PER_PKT];
-    ESP_LOGI(TAG, "UDP 实时传声已启动（目标端口 %d，20ms/包）", UDP_STREAM_PORT);
-
-    while (1) {
-        /* 等 WiFi 拿到 IP，再算本网段的广播地址 */
-        if (dest.sin_addr.s_addr == 0) {
-            esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-            esp_netif_ip_info_t ip;
-            if (netif != NULL && esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0) {
-                dest.sin_addr.s_addr = ip.ip.addr | ~(ip.netmask.addr);
-                uint32_t bc = ntohl(dest.sin_addr.s_addr);
-                ESP_LOGI(TAG, "UDP 发送目标(广播): %u.%u.%u.%u:%d",
-                         (unsigned)((bc >> 24) & 0xFF), (unsigned)((bc >> 16) & 0xFF),
-                         (unsigned)((bc >> 8) & 0xFF), (unsigned)(bc & 0xFF),
-                         UDP_STREAM_PORT);
-            } else {
-                vTaskDelay(pdMS_TO_TICKS(500));
-                continue;
-            }
-        }
-
-        /* 存储不可用或正在录音：让路，不抢 I2S */
-        if (!s_storage_ok || s_recording_active) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            continue;
-        }
-
-        /* 非阻塞检查订阅包：电脑端 udp_mic_receiver.py 每 5 秒发一次 "SUB" */
-        peer_len = sizeof(peer);
-        if (recvfrom(sock, sub, sizeof(sub), MSG_DONTWAIT,
-                     (struct sockaddr *)&peer, &peer_len) > 0) {
-            uint32_t pc = ntohl(peer.sin_addr.s_addr);
-            ESP_LOGI(TAG, "电脑端已订阅，切换单播: %u.%u.%u.%u:%d",
-                     (unsigned)((pc >> 24) & 0xFF), (unsigned)((pc >> 16) & 0xFF),
-                     (unsigned)((pc >> 8) & 0xFF), (unsigned)(pc & 0xFF),
-                     (int)ntohs(peer.sin_port));
-            have_peer = true;
-        }
-
-        size_t n = 0;
-        if (mic_read(buf, UDP_SAMPLES_PER_PKT, &n) != ESP_OK || n == 0) {
-            vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
-        }
-        if (have_peer) {
-            sendto(sock, buf, n * sizeof(int16_t), 0,
-                   (struct sockaddr *)&peer, sizeof(peer));
-        } else {
-            sendto(sock, buf, n * sizeof(int16_t), 0,
-                   (struct sockaddr *)&dest, sizeof(dest));
-        }
-    }
-}
-
 static bool record_to_file(const char *path)
 {
     static int16_t samples[RECORD_BUF_SAMPLES];   // static：避免占用任务栈
@@ -862,7 +712,6 @@ static bool record_to_file(const char *path)
         if (mic_read(samples, RECORD_BUF_SAMPLES, &n) != ESP_OK || n == 0) {
             continue;
         }
-        mic_declick(samples, n);               // 修掉 I2S 位错误毛刺
         uint32_t nb = n * sizeof(int16_t);
         if (written + nb > limit_bytes) {
             nb = limit_bytes - written;
@@ -944,9 +793,18 @@ static void record_task(void *arg)
         oled_set_state(OLED_ST_REC);
 
         s_led_mode = LED_MODE_BLINK;               // 录音中：LED 闪烁
-        s_recording_active = true;                 // UDP 传声任务让路
+#if WIFI_OFF_DURING_REC
+        if (!wifi_cfg_is_active()) {
+            esp_wifi_stop();                       // 关射频，消除录音期间的 WiFi 干扰
+            ESP_LOGI(TAG, "WiFi 已临时关闭（录音期间无远程服务，停止后自动重连）");
+        }
+#endif
         bool ok = record_to_file(path);
-        s_recording_active = false;
+#if WIFI_OFF_DURING_REC
+        if (!wifi_cfg_is_active()) {
+            esp_wifi_start();                      // 录完重连，DHCP 租约在则 IP 不变
+        }
+#endif
 
         if (!ok) {
             /* 写卡出错（卡满 / 被拔出 / 损坏）：停用按键，等重新插卡后自动恢复 */
@@ -1058,10 +916,6 @@ void app_main(void)
 
     /* 连接 WiFi：依序尝试 NVS 已存的多组配置（最多 3 组 × 2 轮） */
     if (wifi_sta_connect()) {
-        /* FTP 服务器常驻，WiFi 断线重连后无需重启即可继续用 */
-        if (ftp_server_start(SD_MOUNT_POINT) != ESP_OK) {
-            ESP_LOGE(TAG, "FTP 服务器启动失败");
-        }
         /* HTTP 在线播放服务：浏览器访问 http://<设备IP>/ 即可在线听录音 */
         if (http_server_start(SD_MOUNT_POINT) != ESP_OK) {
             ESP_LOGE(TAG, "HTTP 服务器启动失败");
@@ -1071,12 +925,5 @@ void app_main(void)
         ESP_LOGW(TAG, "所有 WiFi 均连接失败，自动进入配置模式（热点 %s）", CFG_AP_SSID);
         wifi_cfg_enter_config();
     }
-#endif
-
-#if ENABLE_UDP_STREAM
-    /* UDP 实时传声：必须在 esp_netif_init()（lwIP 协议栈初始化）之后创建。
-       之前放在 WiFi 初始化之前，socket() 在协议栈未就绪时触发
-       "assert failed: tcpip_send_msg_wait_sem (Invalid mbox)" 导致反复重启 */
-    xTaskCreatePinnedToCore(udp_stream_task, "udps", 4096, NULL, 3, NULL, 0);
 #endif
 }
