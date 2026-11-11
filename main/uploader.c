@@ -12,6 +12,7 @@
  */
 #include "uploader.h"
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -169,17 +170,25 @@ static int upload_pass(int sock)
 
     static char names[UP_MAX_FILES][32];
     int cnt = 0;
+    int total = 0;
     struct dirent *e;
+    /* 注意：sdkconfig 里 CONFIG_FATFS_LFN_NONE=y，readdir 返回 8.3 大写短名
+       （如 REC001.WAV），所以匹配必须大小写不敏感 */
     while ((e = readdir(dir)) != NULL && cnt < UP_MAX_FILES) {
+        total++;
         size_t len = strlen(e->d_name);
         if (len > 6 && len < 32 &&
-            strncmp(e->d_name, "rec", 3) == 0 &&
-            strcmp(e->d_name + len - 4, ".wav") == 0) {
+            strncasecmp(e->d_name, "rec", 3) == 0 &&
+            strcasecmp(e->d_name + len - 4, ".wav") == 0) {
             memcpy(names[cnt], e->d_name, len + 1);
             cnt++;
         }
     }
     closedir(dir);
+    if (cnt == 0 && total > 0) {
+        ESP_LOGW(TAG, "扫描 " UP_MOUNT "：%d 项，但 0 个匹配 rec*.wav（如有异常请查文件名）",
+                 total);
+    }
 
     /* 按文件名排序 = 按录制时间从旧到新（插入排序） */
     for (int i = 1; i < cnt; i++) {

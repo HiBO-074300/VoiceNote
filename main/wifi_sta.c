@@ -60,7 +60,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "===== WiFi 已连接 %s =====", s_cur_ssid);
         ESP_LOGI(TAG, "  IP      : " IPSTR, IP2STR(&evt->ip_info.ip));
         ESP_LOGI(TAG, "  网关    : " IPSTR, IP2STR(&evt->ip_info.gw));
-        ESP_LOGI(TAG, "  FTP 访问: ftp://" IPSTR "  (端口 21)", IP2STR(&evt->ip_info.ip));
         ESP_LOGI(TAG, "=======================");
         char ip_str[16];
         snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&evt->ip_info.ip));
