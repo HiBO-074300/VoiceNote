@@ -20,6 +20,13 @@ Thumbs.db
 tmp_*
 __pycache__/
 
+# PyInstaller 打包产物与本地运行配置
+build/
+dist/
+*.spec
+voice_server.ini
+*.exe
+
 # 个人录音（含隐私，不上传）
 rec.wav
 
