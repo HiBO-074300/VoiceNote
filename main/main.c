@@ -36,6 +36,7 @@
 #include "config.h"
 #include "wifi_sta.h"
 #include "http_server.h"
+#include "uploader.h"
 #include "wifi_cfg.h"
 #include "oled.h"
 
@@ -148,6 +149,18 @@ static volatile led_mode_t s_led_mode = LED_MODE_OFF;
 static volatile bool       s_storage_ok = false;   // 存储是否可用（不可用则按键无效）
 static bool                s_spi_bus_ready = false; // SPI 总线是否已初始化（重新挂载时跳过）
 static volatile bool       s_rec_pause_req = false; // GPIO33 短按请求：暂停/继续切换
+static char                s_cur_rec_path[64];      // 正在录音的文件路径（空=不在录音会话）
+
+/* 供 uploader.c 查询：是否处于录音会话（含暂停）；正在写哪个文件 */
+bool record_busy(void)
+{
+    return s_cur_rec_path[0] != 0;
+}
+
+bool record_file_in_use(const char *path)
+{
+    return s_cur_rec_path[0] != 0 && strcmp(s_cur_rec_path, path) == 0;
+}
 
 /* ------------------------- SD 卡插入检测 ------------------------- */
 
@@ -799,12 +812,14 @@ static void record_task(void *arg)
             ESP_LOGI(TAG, "WiFi 已临时关闭（录音期间无远程服务，停止后自动重连）");
         }
 #endif
+        snprintf(s_cur_rec_path, sizeof(s_cur_rec_path), "%s", path);
         bool ok = record_to_file(path);
 #if WIFI_OFF_DURING_REC
         if (!wifi_cfg_is_active()) {
             esp_wifi_start();                      // 录完重连，DHCP 租约在则 IP 不变
         }
 #endif
+        s_cur_rec_path[0] = 0;                     // 录音会话结束，允许上传模块碰这个文件
 
         if (!ok) {
             /* 写卡出错（卡满 / 被拔出 / 损坏）：停用按键，等重新插卡后自动恢复 */
@@ -926,4 +941,7 @@ void app_main(void)
         wifi_cfg_enter_config();
     }
 #endif
+
+    /* 自动上传：lwIP 就绪后启动（发现上位机 → TCP 上传 → 确认后删除） */
+    uploader_start();
 }
