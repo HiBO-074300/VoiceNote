@@ -114,33 +114,38 @@ def handle_conn(conn, addr, save_dir):
             got = 0
             ok = True
             last_pct = -1
-            with open(tmp, "wb") as f:
-                while got < size:
-                    chunk = conn.recv(min(4096, size - got))
-                    if not chunk:
-                        ok = False
-                        break
-                    f.write(chunk)
-                    got += len(chunk)
-                    pct = got * 100 // size
-                    if pct != last_pct:
-                        sys.stdout.write("\r[tcp] %s %3d%% (%d/%d bytes)"
-                                         % (name, pct, got, size))
-                        sys.stdout.flush()
-                        last_pct = pct
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            if ok and got == size:
-                os.replace(tmp, final)
-                conn.sendall(b"OK")
-                print("[tcp] saved: %s" % final)
-            else:
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-                conn.sendall(b"NG")
-                print("[tcp] incomplete: %s (%d/%d), asked retry" % (name, got, size))
+            try:
+                with open(tmp, "wb") as f:
+                    while got < size:
+                        chunk = conn.recv(min(4096, size - got))
+                        if not chunk:
+                            ok = False
+                            break
+                        f.write(chunk)
+                        got += len(chunk)
+                        pct = got * 100 // size
+                        if pct != last_pct:
+                            sys.stdout.write("\r[tcp] %s %3d%% (%d/%d bytes)"
+                                             % (name, pct, got, size))
+                            sys.stdout.flush()
+                            last_pct = pct
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                if ok and got == size:
+                    os.replace(tmp, final)
+                    conn.sendall(b"OK")
+                    print("[tcp] saved: %s" % final)
+                else:
+                    conn.sendall(b"NG")
+                    print("[tcp] incomplete: %s (%d/%d), asked retry" % (name, got, size))
+            finally:
+                # 无论哪条路径退出（成功改名后 tmp 不存在），都保证不留 .part
+                if os.path.exists(tmp):
+                    try:
+                        os.remove(tmp)
+                        print("[tcp] cleaned partial: %s" % tmp)
+                    except OSError:
+                        pass
     except (ConnectionResetError, socket.timeout, OSError):
         pass
     finally:
@@ -165,6 +170,16 @@ def main():
     save_dir = os.path.abspath(save_dir)
     if not os.path.isdir(save_dir):
         os.makedirs(save_dir)
+    # 启动清理：上次程序退出/断电遗留的 .part 半截文件全部删除
+    leftovers = [fn for fn in os.listdir(save_dir) if fn.endswith(".part")]
+    for fn in leftovers:
+        try:
+            os.remove(os.path.join(save_dir, fn))
+            print("[clean] removed leftover partial file: %s" % fn)
+        except OSError:
+            pass
+    if leftovers:
+        print("[clean] %d leftover .part file(s) removed" % len(leftovers))
     print("==============================================")
     print("  声记上位机 —— 录音自动接收服务")
     print("  保存文件夹 : %s" % save_dir)
