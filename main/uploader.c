@@ -71,6 +71,9 @@ static int recv_exact(int sock, void *buf, size_t len)
 
 static int xfer_file(int sock, const char *path, const char *name)
 {
+    if (record_busy()) {                   /* 录音开始：立即让路，碰都不碰 */
+        return -2;
+    }
     FILE *f = fopen(path, "rb");
     if (f == NULL) {
         ESP_LOGW(TAG, "无法打开 %s", path);
@@ -109,6 +112,10 @@ static int xfer_file(int sock, const char *path, const char *name)
     long remain = size;
     int last_pct = -1;
     while (remain > 0) {
+        if (record_busy()) {               /* 每 4KB 查一次：录音开始立即中止 */
+            fclose(f);
+            return -2;                     /* 不碰屏幕、不发 NG，连接由上层关闭 */
+        }
         size_t want = (remain > (long)sizeof(chunk)) ? sizeof(chunk) : (size_t)remain;
         size_t got = fread(chunk, 1, want, f);
         if (got == 0) {
@@ -122,7 +129,7 @@ static int xfer_file(int sock, const char *path, const char *name)
         }
         remain -= (long)got;
         int pct = (int)(((size - remain) * 100) / size);
-        if (pct != last_pct) {             /* 整数百分比变化才刷屏 */
+        if (pct != last_pct && !record_busy()) {   /* 录音中绝不刷屏 */
             oled_set_upload(name, pct);
             last_pct = pct;
         }
@@ -150,6 +157,9 @@ static int xfer_file(int sock, const char *path, const char *name)
 
 static int upload_pass(int sock)
 {
+    if (record_busy()) {                   /* 防御：进本轮前录音已开始 */
+        return -2;
+    }
     DIR *dir = opendir(UP_MOUNT);
     if (dir == NULL) {
         ESP_LOGW(TAG, "无法打开 " UP_MOUNT);
@@ -195,7 +205,7 @@ static int upload_pass(int sock)
         }
         int r = xfer_file(sock, path, names[i]);
         if (r < 0) {
-            return -1;                     /* 网络故障，本轮终止 */
+            return r;                      /* -1 网络故障 / -2 录音开始，均终止本轮 */
         }
         if (r == 0) {
             ok_cnt++;
@@ -216,6 +226,10 @@ static void uploader_task(void *arg)
     ESP_LOGI(TAG, "自动上传模块启动（发现/上传端口 %d）", UP_PORT);
 
     while (1) {
+        if (record_busy()) {               /* 录音会话中：不发现、不连接、不碰屏幕 */
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
         if (wifi_cfg_is_active()) {        /* 配置热点模式：没有上位机概念 */
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
@@ -290,10 +304,20 @@ static void uploader_task(void *arg)
             continue;
         }
         ESP_LOGI(TAG, "已连接上位机，开始同步录音");
+        if (record_busy()) {               /* 连接间隙录音已开始 */
+            close(ts);
+            continue;
+        }
         oled_set_state(OLED_ST_UPLOAD);    /* 屏幕显示 UP:文件名 进度% */
 
         int r = upload_pass(ts);
         close(ts);
+
+        if (r == -2) {
+            /* 因录音开始而中止：屏幕已由录音任务接管（ST:REC），这里不碰 */
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
         oled_set_state(OLED_ST_READY);     /* 传完恢复空闲显示 */
 
         if (r < 0) {
