@@ -29,6 +29,7 @@ voice_server.ini
 
 # 个人录音（含隐私，不上传）
 rec.wav
+*.wav
 
 # Python
 *.pyc
