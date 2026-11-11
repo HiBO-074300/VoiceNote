@@ -20,6 +20,7 @@
 #include "esp_log.h"
 #include "lwip/sockets.h"
 #include "esp_netif.h"
+#include <errno.h>
 #include "oled.h"
 
 #define UP_PORT          9001
@@ -297,7 +298,9 @@ static void uploader_task(void *arg)
         setsockopt(ts, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
         if (connect(ts, (struct sockaddr *)&server, sizeof(server)) != 0) {
-            ESP_LOGW(TAG, "连接上位机失败，重新发现");
+            /* ETIMEDOUT=被防火墙静默丢弃；ECONNREFUSED=电脑端没开程序 */
+            ESP_LOGW(TAG, "连接上位机失败 errno=%d (%s)，重新发现",
+                     errno, strerror(errno));
             close(ts);
             have_server = false;           /* 电脑可能下线了，重新走发现 */
             vTaskDelay(pdMS_TO_TICKS(3000));
