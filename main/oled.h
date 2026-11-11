@@ -14,6 +14,7 @@ typedef enum {
     OLED_ST_READY,          // 空闲，可录音
     OLED_ST_REC,            // 录音中
     OLED_ST_PAUSE,          // 录音暂停
+    OLED_ST_UPLOAD,         // 正在上传录音到电脑
     OLED_ST_CONFIG,         // WiFi 配置模式（热点开启）
     OLED_ST_ERROR,          // 存储异常
 } oled_state_t;
@@ -28,3 +29,4 @@ void oled_set_wifi_ok(bool ok);
 void oled_set_ip(const char *ip);            /* 如 "192.168.1.23" */
 void oled_set_file(const char *filename);    /* 传全路径或文件名均可，只取末段 */
 void oled_set_seconds(uint32_t sec);         /* 录音已录秒数 */
+void oled_set_upload(const char *filename, int percent);  /* 上传中：文件名+进度% */

@@ -65,6 +65,7 @@ def handle_conn(conn, addr, save_dir):
             tmp = final + ".part"
             got = 0
             ok = True
+            last_pct = -1
             with open(tmp, "wb") as f:
                 while got < size:
                     chunk = conn.recv(min(4096, size - got))
@@ -73,6 +74,14 @@ def handle_conn(conn, addr, save_dir):
                         break
                     f.write(chunk)
                     got += len(chunk)
+                    pct = got * 100 // size
+                    if pct != last_pct:
+                        sys.stdout.write("\r[tcp] %s %3d%% (%d/%d bytes)"
+                                         % (name, pct, got, size))
+                        sys.stdout.flush()
+                        last_pct = pct
+            sys.stdout.write("\n")
+            sys.stdout.flush()
             if ok and got == size:
                 os.replace(tmp, final)
                 conn.sendall(b"OK")

@@ -144,6 +144,8 @@ typedef struct {
     uint32_t     seconds;
     char         file[16];
     char         ip[16];
+    char         up_name[14];   /* 上传中的文件名（不带路径） */
+    int          up_pct;        /* 上传进度 0~100 */
 } oled_info_t;
 
 static uint8_t      s_fb[OLED_FB_SIZE];
@@ -205,6 +207,23 @@ void oled_set_seconds(uint32_t sec)
     portENTER_CRITICAL(&s_mux);
     s_info.seconds = sec;
     s_dirty = true;
+    portEXIT_CRITICAL(&s_mux);
+}
+
+/* 上传进度：只在整数百分比变化时刷新，避免高频重绘 */
+void oled_set_upload(const char *filename, int percent)
+{
+    const char *p = strrchr(filename ? filename : "", '/');
+    p = p ? p + 1 : filename;
+    portENTER_CRITICAL(&s_mux);
+    bool changed = (s_info.up_pct != percent) ||
+                   (strncmp(s_info.up_name, p ? p : "", sizeof(s_info.up_name)) != 0);
+    if (changed) {
+        strncpy(s_info.up_name, p ? p : "", sizeof(s_info.up_name) - 1);
+        s_info.up_name[sizeof(s_info.up_name) - 1] = '\0';
+        s_info.up_pct = percent;
+        s_dirty = true;
+    }
     portEXIT_CRITICAL(&s_mux);
 }
 
@@ -280,6 +299,15 @@ static void oled_render(void)
     case OLED_ST_PAUSE:
         draw_str6(3, "ST:PAUSE");
         break;
+    case OLED_ST_UPLOAD: {
+        /* 上传中：文件名 + 进度百分比（缓冲放大避免 snprintf 截断告警，
+           draw_str6 最多画 21 列，超出部分自然裁掉） */
+        char ubuf[40];
+        snprintf(ubuf, sizeof(ubuf), "UP:%.13s %3d%%",
+                 v.up_name, v.up_pct > 100 ? 100 : v.up_pct);
+        draw_str6(3, ubuf);
+        break;
+    }
 
     case OLED_ST_REC:
     default:

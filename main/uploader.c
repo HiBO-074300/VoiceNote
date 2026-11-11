@@ -20,6 +20,7 @@
 #include "esp_log.h"
 #include "lwip/sockets.h"
 #include "esp_netif.h"
+#include "oled.h"
 
 #define UP_PORT          9001
 #define UP_MAGIC         "VNF1"
@@ -106,6 +107,7 @@ static int xfer_file(int sock, const char *path, const char *name)
 
     static uint8_t chunk[4096];            /* 上传任务独享，static 省栈 */
     long remain = size;
+    int last_pct = -1;
     while (remain > 0) {
         size_t want = (remain > (long)sizeof(chunk)) ? sizeof(chunk) : (size_t)remain;
         size_t got = fread(chunk, 1, want, f);
@@ -119,6 +121,11 @@ static int xfer_file(int sock, const char *path, const char *name)
             return -1;
         }
         remain -= (long)got;
+        int pct = (int)(((size - remain) * 100) / size);
+        if (pct != last_pct) {             /* 整数百分比变化才刷屏 */
+            oled_set_upload(name, pct);
+            last_pct = pct;
+        }
     }
     fclose(f);
 
@@ -283,9 +290,11 @@ static void uploader_task(void *arg)
             continue;
         }
         ESP_LOGI(TAG, "已连接上位机，开始同步录音");
+        oled_set_state(OLED_ST_UPLOAD);    /* 屏幕显示 UP:文件名 进度% */
 
         int r = upload_pass(ts);
         close(ts);
+        oled_set_state(OLED_ST_READY);     /* 传完恢复空闲显示 */
 
         if (r < 0) {
             have_server = false;           /* 传输中断，重新发现 */
