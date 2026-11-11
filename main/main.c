@@ -591,7 +591,8 @@ static void key_wait_release(void)
 
 /* ---------------------------- 录音写文件 ---------------------------- */
 
-/* 扫描 /sdcard 里所有 recNNN.wav，挑一个不会覆盖已有录音的文件名 */
+/* 扫描 /sdcard 里所有 recNNN.wav，挑一个不会覆盖已有录音的文件名
+ * （卡上用序号命名；防覆盖由电脑端落地时加"接收时间戳"前缀实现） */
 static void next_record_path(char *out, size_t out_len)
 {
     int next = 0;
@@ -609,7 +610,7 @@ static void next_record_path(char *out, size_t out_len)
         closedir(dir);
     }
 
-    /* 再逐个 stat 确认：FTP 上传 / 手工拷进来的同名文件也算占用 */
+    /* 再逐个 stat 确认：上传拷贝 / 手工放进来的同名文件也算占用 */
     while (1) {
         snprintf(out, out_len, SD_MOUNT_POINT "/rec%03d.wav", next);
         struct stat st;

@@ -172,13 +172,12 @@ static int upload_pass(int sock)
     int cnt = 0;
     int total = 0;
     struct dirent *e;
-    /* 注意：sdkconfig 里 CONFIG_FATFS_LFN_NONE=y，readdir 返回 8.3 大写短名
-       （如 REC001.WAV），所以匹配必须大小写不敏感 */
+    /* 匹配所有 .wav（大小写不敏感）：兼容旧序号名 REC001.WAV 和
+       新时间戳名 rec_20261111_143025.wav（LFN 已开启） */
     while ((e = readdir(dir)) != NULL && cnt < UP_MAX_FILES) {
         total++;
         size_t len = strlen(e->d_name);
-        if (len > 6 && len < 32 &&
-            strncasecmp(e->d_name, "rec", 3) == 0 &&
+        if (len >= 5 && len < 32 &&
             strcasecmp(e->d_name + len - 4, ".wav") == 0) {
             memcpy(names[cnt], e->d_name, len + 1);
             cnt++;

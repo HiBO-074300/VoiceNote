@@ -106,7 +106,10 @@ def handle_conn(conn, addr, save_dir):
             size = sz_b[0] | (sz_b[1] << 8) | (sz_b[2] << 16) | (sz_b[3] << 24)
             print("[tcp] %s -> %s (%d bytes)" % (peer, name, size))
 
-            final = os.path.join(save_dir, name)
+            # 以"接收时间"命名，杜绝卡上序号循环导致的覆盖：
+            # 20261111_153012_REC001.WAV（时间+原文件名，既唯一又可追溯）
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            final = os.path.join(save_dir, "%s_%s" % (stamp, name))
             tmp = final + ".part"
             got = 0
             ok = True
